@@ -1,23 +1,9 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <frame.h>
-#include <page.h>
 #include <hhdm.h>
-
-typedef struct linked_list_node {
-    uint64_t base;
-    uint64_t end;
-    uint64_t len;
-    uint64_t flags;
-    struct linked_list_node *next;
-    struct linked_list_node *prev;
-} linked_list_node_t;
-
-typedef struct linked_list {
-    uint64_t count;
-    linked_list_node_t *head;
-    linked_list_node_t *tail;
-} linked_list_t;
+#include <page.h>
+#include <vmm.h>
 
 static linked_list_t list;
 
