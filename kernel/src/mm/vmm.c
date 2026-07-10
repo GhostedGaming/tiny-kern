@@ -1,9 +1,9 @@
 #include <stdint.h>
 #include <stddef.h>
-#include <frame.h>
-#include <hhdm.h>
-#include <page.h>
-#include <vmm.h>
+#include <mm/frame.h>
+#include <mm/hhdm.h>
+#include <mm/page.h>
+#include <mm/vmm.h>
 
 static linked_list_t list;
 

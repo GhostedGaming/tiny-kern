@@ -1,9 +1,9 @@
 #include <stdint.h>
 #include <limine.h>
-#include <memory.h>
-#include <frame.h>
-#include <hhdm.h>
-#include <page.h>
+#include <mm/memory.h>
+#include <mm/frame.h>
+#include <mm/hhdm.h>
+#include <mm/page.h>
 
 #define PAGE_SIZE 0x1000
 

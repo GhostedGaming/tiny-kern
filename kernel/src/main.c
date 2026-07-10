@@ -3,9 +3,11 @@
 #include <stdbool.h>
 #include <limine.h>
 #include <gdt.h>
-#include <hhdm.h>
-#include <frame.h>
-#include <page.h>
+#include <mm/hhdm.h>
+#include <mm/frame.h>
+#include <mm/page.h>
+#include <mm/vmm.h>
+#include <idt.h>
 
 // Set the base revision to 6, this is recommended as this is the latest
 // base revision described by the Limine boot protocol specification.
@@ -78,6 +80,8 @@ void kmain(void) {
     hhdm_init(hhdm_request.response->offset);
     frame_init(memmap_request.response);
     paging_init(memmap_request.response, executable_request.response);
+    vmm_init();
+    idt_init();
 
     // Fetch the first framebuffer.
     struct limine_framebuffer *framebuffer = framebuffer_request.response->framebuffers[0];

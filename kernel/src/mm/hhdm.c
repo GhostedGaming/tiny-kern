@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include <hhdm.h>
+#include <mm/hhdm.h>
 
 static uint64_t hhdm_offset;
 

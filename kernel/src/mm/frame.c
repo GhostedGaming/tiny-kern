@@ -2,8 +2,8 @@
 #include <stddef.h>
 #include <limine.h>
 #include <lib/errno.h>
-#include <hhdm.h>
-#include <frame.h>
+#include <mm/hhdm.h>
+#include <mm/frame.h>
 
 #define PAGE_SIZE 0x1000
 
