@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdbool.h>
+#include <logging/print.h>
 #include <idt.h>
 
 #define IDT_MAX_DESCRIPTORS 255
@@ -40,6 +41,10 @@ void idt_set_descriptor(uint8_t vector, void* isr, uint8_t flags) {
     descriptor->reserved       = 0;
 }
 
+void timer_handler() {
+    print(". ");
+}
+
 void idt_init() {
     idtr.base = (uintptr_t)&idt[0];
     idtr.limit = (uint16_t)sizeof(idt_entry_t) * IDT_MAX_DESCRIPTORS - 1;
@@ -48,6 +53,9 @@ void idt_init() {
         idt_set_descriptor(vector, isr_stub_table[vector], 0x8E);
         vectors[vector] = true;
     }
+
+    idt_set_descriptor(0x20, timer_handler, 0x8E);
+    vectors[0x20] = true;
 
     __asm__ volatile ("lidt %0" : : "m"(idtr));
 }

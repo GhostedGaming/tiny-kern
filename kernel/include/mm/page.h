@@ -14,6 +14,8 @@
 #define PAGE_DIRTY (0x1 << 6)
 #define PAGE_NXE (1ULL << 63)
 
+extern uint64_t *kernel_pml4;
+
 void reload_cr3(uint64_t pml_to_load);
 uint64_t *paging_create_pml4();
 uint8_t paging_map_page(uint64_t *pml4_phys, void *virt_addr, uintptr_t phys_addr, uint64_t flags);

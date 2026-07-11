@@ -237,7 +237,7 @@ uint8_t paging_init(struct limine_memmap_response *memmap, struct limine_executa
 
     reload_cr3((uint64_t)pml4);
 
-    kernel_pml4 = (uint64_t *)phys_to_virt(pml4);
+    kernel_pml4 = (uint64_t *)pml4;
  
     return 0;
 }

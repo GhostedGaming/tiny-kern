@@ -10,6 +10,7 @@
 #include <idt.h>
 #include <logging/print.h>
 #include <acpi.h>
+#include <apic.h>
 
 // Set the base revision to 6, this is recommended as this is the latest
 // base revision described by the Limine boot protocol specification.
@@ -88,7 +89,8 @@ void kmain(void) {
 
     print("Parsing tables\n");
     acpi_parse_tables();
-
+    apic_init();
+    asm volatile ("sti");
     // We're done, just hang...
     hcf();
 }
