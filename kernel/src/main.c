@@ -8,6 +8,8 @@
 #include <mm/page.h>
 #include <mm/vmm.h>
 #include <idt.h>
+#include <logging/print.h>
+#include <acpi.h>
 
 // Set the base revision to 6, this is recommended as this is the latest
 // base revision described by the Limine boot protocol specification.
@@ -22,7 +24,7 @@ static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(6);
 // once or marked as used with the "used" attribute as done here.
 
 __attribute__((used, section(".limine_requests")))
-static volatile struct limine_framebuffer_request framebuffer_request = {
+volatile struct limine_framebuffer_request framebuffer_request = {
     .id = LIMINE_FRAMEBUFFER_REQUEST_ID,
     .revision = 0
 };
@@ -82,18 +84,10 @@ void kmain(void) {
     paging_init(memmap_request.response, executable_request.response);
     vmm_init();
     idt_init();
+    print_init();
 
-    // Fetch the first framebuffer.
-    struct limine_framebuffer *framebuffer = framebuffer_request.response->framebuffers[0];
-
-    // Print a nice pattern to screen as an example.
-    // Note: we assume the framebuffer model is RGB with 32-bit pixels.
-    volatile uint32_t *fb_ptr = framebuffer->address;
-    for (size_t y = 0; y < framebuffer->height; y++) {
-        for (size_t x = 0; x < framebuffer->width; x++) {
-            fb_ptr[y * (framebuffer->pitch / 4) + x] = 0xFFAAFF00;
-        }
-    }
+    print("Parsing tables\n");
+    acpi_parse_tables();
 
     // We're done, just hang...
     hcf();

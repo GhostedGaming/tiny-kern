@@ -1,3 +1,5 @@
+[BITS 64]
+
 global isr_stub_table
 extern exception_handler
 

@@ -12,15 +12,24 @@ void *vmm_map_region(uint64_t *pml4_phys, void *vaddr, uint64_t flags, int pages
         return NULL;
     }
 
-    linked_list_node_t *node = (linked_list_node_t *)phys_to_virt(frame_alloc());
-    if (!node) {
+    uintptr_t node_frame = frame_alloc();
+    if (!node_frame) {
         return NULL;
     }
+
+    linked_list_node_t *node = (linked_list_node_t *)phys_to_virt(node_frame);
     node->base  = (uint64_t)vaddr;
     node->len   = 0;
     node->flags = flags;
     node->next  = NULL;
     node->prev  = NULL;
+
+    uintptr_t frames_frame = frame_alloc();
+    if (!frames_frame) {
+        frame_free(node_frame);
+        return NULL;
+    }
+    uintptr_t *frames = (uintptr_t *)phys_to_virt(frames_frame);
 
     for (int i = 0; i < pages_needed; i++) {
         void *page_vaddr = (void *)((uint64_t)vaddr + (uint64_t)i * PAGE_SIZE);
@@ -35,6 +44,7 @@ void *vmm_map_region(uint64_t *pml4_phys, void *vaddr, uint64_t flags, int pages
             goto fail;
         }
 
+        frames[node->len] = frame;
         node->len++;
     }
 
@@ -49,51 +59,47 @@ void *vmm_map_region(uint64_t *pml4_phys, void *vaddr, uint64_t flags, int pages
     list.tail = node;
     list.count++;
 
+    frame_free(frames_frame);
     return (void *)node->base;
 
 fail:
     for (uint64_t j = 0; j < node->len; j++) {
         void *page_vaddr = (void *)((uint64_t)vaddr + j * PAGE_SIZE);
         paging_unmap_page(pml4_phys, page_vaddr);
+        frame_free(frames[j]);
     }
-    frame_free((uintptr_t)virt_to_phys(node));
+    frame_free(frames_frame);
+    frame_free(node_frame);
     return NULL;
 }
 
 void vmm_free_region(uint64_t *pml4, linked_list_node_t *node) {
-    if (!pml4) {
-        return;
-    }
-
-    if (!node) {
+    if (!pml4 || !node) {
         return;
     }
 
     uint64_t base = node->base;
-    uint64_t end = node->end;
+    uint64_t end  = node->end;
 
-    uint64_t i = base;
-
-    while (i != end) {
+    for (uint64_t i = base; i != end; i += PAGE_SIZE) {
         paging_unmap_page(pml4, (void *)i);
-        i+=PAGE_SIZE;
     }
 
     if (node->prev) {
-        node->prev = node->next;
+        node->prev->next = node->next;
     } else {
-        list.head = node->prev;
+        list.head = node->next;
     }
 
     if (node->next) {
-        node->next = node->prev;
+        node->next->prev = node->prev;
     } else {
         list.tail = node->prev;
     }
 
     list.count--;
 
-    frame_free(virt_to_phys((void *)node));
+    frame_free((uintptr_t)virt_to_phys((void *)node));
 }
 
 uint8_t vmm_init() {

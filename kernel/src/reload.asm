@@ -1,3 +1,5 @@
+[BITS 64]
+
 global reload
 
 reload:

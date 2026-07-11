@@ -73,21 +73,20 @@ uint64_t get_pml(uint8_t level, void *addr) {
 }
 
 uint64_t *paging_create_pml4() {
-    uintptr_t *pml4 = (uintptr_t *)frame_alloc();
+    uintptr_t pml4_phys = frame_alloc();
 
-    if (!pml4) {
+    if (!pml4_phys) {
         return NULL;
     }
 
-    memset(phys_to_virt((uintptr_t)pml4), 0, PAGE_SIZE);
+    uint64_t *pml4_virt = (uint64_t *)phys_to_virt(pml4_phys);
+    memset(pml4_virt, 0, PAGE_SIZE);
 
-    uintptr_t *pml4_virt = phys_to_virt(*pml4);
-
-    for (int i = 256; i < 511; i++) {
-        pml4_virt[i] = (uintptr_t)phys_to_virt(kernel_pml4[i]);
+    for (int i = 256; i < 512; i++) {
+        pml4_virt[i] = kernel_pml4[i];
     }
 
-    return pml4;
+    return (uint64_t *)pml4_phys;
 }
 
 uint8_t paging_map_page(uint64_t *pml4_phys, void *virt_addr, uintptr_t phys_addr, uint64_t flags) {
@@ -182,19 +181,21 @@ static uint8_t map_kernel_range(uint64_t *pml4, uintptr_t virt_start, uintptr_t 
 }
 
 uint8_t paging_init(struct limine_memmap_response *memmap, struct limine_executable_address_response *exec) {
-    uintptr_t *pml4 = (uintptr_t *)frame_alloc();
+    uintptr_t pml4 = frame_alloc();
 
     if (!pml4) {
         return 1;
     }
 
-    memset(phys_to_virt((uintptr_t)pml4), 0, PAGE_SIZE);
+    memset(phys_to_virt(pml4), 0, PAGE_SIZE);
 
     for (uint64_t i = 0; i < memmap->entry_count; i++) {
         struct limine_memmap_entry *entry = memmap->entries[i];
         if (entry->type == LIMINE_MEMMAP_USABLE 
             || entry->type == LIMINE_MEMMAP_FRAMEBUFFER 
-            || entry->type == LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE) {
+            || entry->type == LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE
+            || entry->type == LIMINE_MEMMAP_ACPI_RECLAIMABLE
+            || entry->type == LIMINE_MEMMAP_ACPI_NVS) {
             for (uint64_t offset = 0; offset < entry->length; offset += PAGE_SIZE) {
                 if (paging_map_page((uint64_t *)pml4,
                                      phys_to_virt(entry->base + offset),
@@ -236,12 +237,7 @@ uint8_t paging_init(struct limine_memmap_response *memmap, struct limine_executa
 
     reload_cr3((uint64_t)pml4);
 
-    uint64_t *res = 0;
-
-    asm volatile ("mov %%cr3, %%rax" ::: "rax");
-    asm volatile ("mov %%rax, %0" : "=r"(res) ::);
-
-    kernel_pml4 = res;
+    kernel_pml4 = (uint64_t *)phys_to_virt(pml4);
  
     return 0;
 }
