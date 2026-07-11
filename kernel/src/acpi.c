@@ -203,5 +203,5 @@ void acpi_parse_tables() {
 	lapic_addr = madt->lapic_addr;
 
 	parse_madt_entries(madt);
-	print("Final LAPIC_ADDR: 0x%X, IOAPIC_ADDR: 0x%X\n", lapic_addr, ioapic_addr);
+	print("APIC_ADDR: 0x%X, IOAPIC_ADDR: 0x%X\n", lapic_addr, ioapic_addr);
 }
