@@ -1,11 +1,20 @@
 #include <stdint.h>
 #include <mm/page.h>
 #include <mm/hhdm.h>
+#include <portio.h>
 #include <acpi.h>
 #include <apic.h>
 
 #define IS_BSP 0x100
 #define APIC_ENABLE 0x800
+
+#define APIC_SVR         0xF0
+#define APIC_LVT_TIMER   0x320
+#define APIC_TIMER_DIV   0x3E0
+#define APIC_TIMER_INIT  0x380
+#define APIC_TIMER_CUR   0x390
+
+uint64_t apic_count = 0x100000;
 
 static inline uint64_t read_msr(uint32_t msr) {
     uint32_t low, high;
@@ -19,18 +28,35 @@ static inline void write_msr(uint32_t msr, uint64_t value) {
     __asm__ volatile ("wrmsr" : : "c" (msr), "a" (low), "d" (high));
 }
 
+uint32_t apic_read(uint32_t reg) {
+    volatile uint32_t *lapic = (volatile uint32_t *)phys_to_virt(lapic_addr);
+    return lapic[reg / 4];
+}
+
+void apic_write(uint32_t reg, uint32_t value) {
+    volatile uint32_t *lapic = (volatile uint32_t *)phys_to_virt(lapic_addr);
+    lapic[reg / 4] = value;
+}
+
+void apic_eoi() {
+    apic_write(0xB0, 0x0);
+}
+
 uint8_t apic_init() {
-    // Map the LAPIC MMIO page
+    outb(0x21, 0xFF);
+    outb(0xA1, 0xFF);
+
     paging_map_page(kernel_pml4, phys_to_virt(lapic_addr), lapic_addr, PAGE_PRESENT | PAGE_WRITABLE | PAGE_DISABLE_CACHE);
 
-    volatile uint32_t *lapic = (volatile uint32_t *)phys_to_virt(lapic_addr);
-
-    // Step 1: make sure xAPIC is globally enabled via IA32_APIC_BASE MSR (0x1B)
     uint64_t apic_base = read_msr(0x1B);
-    apic_base |= APIC_ENABLE; // bit 11, global enable
+    apic_base |= APIC_ENABLE;
     write_msr(0x1B, apic_base);
 
-    // Step 2: software-enable via the SVR, offset 0xF0, register index 0xF0/4 = 0x3C in a uint32_t array
-    lapic[0xF0 / 4] = lapic[0xF0 / 4] | 0x100 | 0xFF; // bit 8 = software enable, low byte = spurious vector
+    apic_write(APIC_SVR, apic_read(APIC_SVR) | 0x100 | 0xFF);
+
+    apic_write(APIC_TIMER_DIV, 0x3);
+    apic_write(APIC_LVT_TIMER, 0x20 | 0x20000);
+    apic_write(APIC_TIMER_INIT, apic_count);
+
     return 0;
 }

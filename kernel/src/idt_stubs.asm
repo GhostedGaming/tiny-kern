@@ -1,24 +1,28 @@
 [BITS 64]
-
-global isr_stub_table
 extern exception_handler
+extern timer_handler
+global isr_stub_table
+global apic_stub
 
 isr_stub_table:
-%assign i 0 
-%rep    32 
+%assign i 0
+%rep    32
     dq isr_stub_%+i
-%assign i i+1 
+%assign i i+1
 %endrep
 
 %macro isr_err_stub 1
 isr_stub_%+%1:
     call exception_handler
+    add rsp, 8
     iretq
 %endmacro
 
 %macro isr_no_err_stub 1
 isr_stub_%+%1:
+    push 0
     call exception_handler
+    add rsp, 8
     iretq
 %endmacro
 
@@ -54,3 +58,35 @@ isr_no_err_stub 28
 isr_no_err_stub 29
 isr_err_stub    30
 isr_no_err_stub 31
+
+apic_stub:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    push rsi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    call timer_handler
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    iretq

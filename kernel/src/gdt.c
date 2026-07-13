@@ -73,11 +73,11 @@ static inline void write_tss() {
 }
 
 void gdt_init() {
-    set_descriptor(0, 0, 0, 0, 0);                // Null Descriptor
-    set_descriptor(1, 0, 0xFFFFFFFF, 0x9A, 0xAF); // Code Descriptor
-    set_descriptor(2, 0, 0xFFFFFFFF, 0x92, 0xCF); // Data Descriptor
-    set_descriptor(3, 0, 0xFFFFFFFF, 0xF2, 0xAF); // Code Descriptor (User)
-    set_descriptor(4, 0, 0xFFFFFFFF, 0xFA, 0xCF); // Data Descriptor (User)
+    set_descriptor(0, 0, 0, 0, 0);
+    set_descriptor(1, 0, 0xFFFFFFFF, 0x9A, 0xA);
+    set_descriptor(2, 0, 0xFFFFFFFF, 0x92, 0xC);
+    set_descriptor(3, 0, 0xFFFFFFFF, 0xF2, 0xA);
+    set_descriptor(4, 0, 0xFFFFFFFF, 0xFA, 0xC);
 
     write_tss();
     struct gdtr ptr = {
