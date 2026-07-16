@@ -41,6 +41,10 @@ void idt_set_descriptor(uint8_t vector, void* isr, uint8_t flags) {
     descriptor->isr_mid        = ((uint64_t)isr >> 16) & 0xFFFF;
     descriptor->isr_high       = ((uint64_t)isr >> 32) & 0xFFFFFFFF;
     descriptor->reserved       = 0;
+
+    vectors[vector] = true;
+
+
 }
 
 void timer_handler() {
@@ -54,11 +58,10 @@ void idt_init() {
 
     for (uint8_t vector = 0; vector < 32; vector++) {
         idt_set_descriptor(vector, isr_stub_table[vector], 0x8E);
-        vectors[vector] = true;
     }
 
     idt_set_descriptor(0x20, apic_stub, 0x8E);
-    vectors[0x20] = true;
+    ioapic_set_entry(0, 0x20);
 
     __asm__ volatile ("lidt %0" : : "m"(idtr));
 }
