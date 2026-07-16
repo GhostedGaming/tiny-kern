@@ -107,7 +107,8 @@ uint8_t apic_init() {
     for (int i = 0; i < irq_lines; i++) {
         ioapic_write(IOAPICREDTBL(i), IOAPIC_MASKED);
     }
-
+    
+    ioapic_set_entry(0, 0x20);
     ioapic_unmask(0);
 
     return 0;

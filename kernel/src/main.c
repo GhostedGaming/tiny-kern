@@ -86,10 +86,9 @@ void kmain(void) {
     vmm_init();
     idt_init();
     print_init();
-
-    print("Parsing tables\n");
     acpi_parse_tables();
     apic_init();
+
     asm volatile ("sti");
     // We're done, just hang...
     hcf();
