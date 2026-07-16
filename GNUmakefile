@@ -12,9 +12,19 @@ override IMAGE_NAME := template-$(ARCH)
 # Toolchain for building the 'limine' executable for the host.
 HOST_CC := cc
 HOST_CFLAGS := -g -O2 -pipe
-HOST_CPPFLAGS :=
+HOST_CPPFLAGS := 
 HOST_LDFLAGS :=
 HOST_LIBS :=
+
+# Kernel build dependencies (formerly kernel/get-deps).
+FREESTANDING_HDRS_REPO   := https://github.com/osdev0/freestanding-c-hdrs.git
+FREESTANDING_HDRS_COMMIT := 38fed4e1e3365733ddbfa03b0a28936243ad31e9
+
+CC_RUNTIME_REPO   := https://github.com/osdev0/cc-runtime.git
+CC_RUNTIME_COMMIT := dae79833b57a01b9fd3e359ee31def69f5ae899b
+
+LIMINE_PROTOCOL_REPO   := https://github.com/Limine-Bootloader/limine-protocol.git
+LIMINE_PROTOCOL_COMMIT := 80ef54bed402b8c0b672a707c1df4c532f3428ad
 
 .PHONY: all
 all: $(IMAGE_NAME).iso
@@ -152,7 +162,33 @@ limine-binary/limine:
 		LIBS="$(HOST_LIBS)"
 
 kernel/.deps-obtained:
-	./kernel/get-deps
+	@set -e; \
+	clone_repo_commit() { \
+		repo_url="$$1"; dest="$$2"; commit="$$3"; \
+		if test -d "$$dest/.git"; then \
+			git -C "$$dest" reset --hard; \
+			git -C "$$dest" clean -fd; \
+			if ! git -C "$$dest" -c advice.detachedHead=false checkout "$$commit"; then \
+				rm -rf "$$dest"; \
+			fi; \
+		elif test -d "$$dest"; then \
+			echo "error: '$$dest' is not a Git repository" 1>&2; \
+			exit 1; \
+		fi; \
+		if ! test -d "$$dest"; then \
+			git clone "$$repo_url" "$$dest"; \
+			if ! git -C "$$dest" -c advice.detachedHead=false checkout "$$commit"; then \
+				rm -rf "$$dest"; \
+				exit 1; \
+			fi; \
+		fi; \
+	}; \
+	rm -f kernel/.deps-obtained; \
+	clone_repo_commit "$(FREESTANDING_HDRS_REPO)" kernel/freestanding-c-hdrs "$(FREESTANDING_HDRS_COMMIT)"; \
+	clone_repo_commit "$(CC_RUNTIME_REPO)" kernel/cc-runtime "$(CC_RUNTIME_COMMIT)"; \
+	clone_repo_commit "$(LIMINE_PROTOCOL_REPO)" kernel/limine-protocol "$(LIMINE_PROTOCOL_COMMIT)"; \
+	touch kernel/.deps-obtained
+	@printf "\nDependencies obtained successfully.\n"
 
 .PHONY: kernel
 kernel: kernel/.deps-obtained
