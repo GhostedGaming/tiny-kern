@@ -1,3 +1,4 @@
+#include "multitasking/thread.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -65,6 +66,18 @@ static void hcf(void) {
     }
 }
 
+void test() {
+    for (;;) {
+        print("Hello world! 1\n");
+    }
+}
+
+void test1() {
+    for (;;) {
+        print("Hello world! 2\n");
+    }
+}
+
 // The following will be our kernel's entry point.
 // If renaming kmain() to something else, make sure to change the
 // linker script accordingly.
@@ -92,6 +105,9 @@ void kmain(void) {
     ahci_init();
 
     asm volatile ("sti");
+    create_thread(test);
+    create_thread(test1);
+
     // We're done, just hang...
     hcf();
 }

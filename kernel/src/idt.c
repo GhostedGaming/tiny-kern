@@ -1,3 +1,4 @@
+#include "multitasking/thread.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -64,6 +65,7 @@ void idt_set_descriptor(uint8_t vector, void* isr, uint8_t flags) {
 void timer_handler() {
     print(".");
     apic_eoi();
+    schedule();
 }
 
 void idt_init() {

@@ -143,19 +143,6 @@ static void new_line(void) {
 
 static void putchar(char c) {
     if (c == ' ') {
-        uint32_t stride = framebuffer_request.response->framebuffers[0]->pitch / 4;
-        uint32_t *fb = framebuffer_request.response->framebuffers[0]->address;
-        uint16_t cell_w = GLYPH_W + LETTER_SPACING_PX;
-        uint32_t glyph_x = console.origin_x + (console.col * cell_w);
-        uint32_t glyph_y = console.origin_y + (console.row * GLYPH_H);
-
-        for (uint8_t i = 0; i < GLYPH_H; i++) {
-            uint32_t *fb_row = &fb[(glyph_y + i) * stride + glyph_x];
-            for (uint8_t j = 0; j < cell_w; j++) {
-                fb_row[j] = 0x00000000;
-            }
-        }
-
         console.col++;
         if (console.col >= console.max_cols)
             new_line();
@@ -205,10 +192,14 @@ static void putchar(char c) {
         uint8_t row_bits = glyph_rows[i];
         uint32_t *fb_row = &fb[(glyph_y + i) * stride + glyph_x];
         for (uint8_t j = 0; j < GLYPH_W; j++) {
-            fb_row[j] = (row_bits & (1 << (7 - j))) ? 0xFFFFFFFF : 0x00000000;
+            if ((row_bits & (1 << (7 - j)))) {
+                fb_row[j] = 0xFFFFFFFF;
+            } else {
+                continue;
+            }
         }
         for (uint8_t j = 0; j < LETTER_SPACING_PX; j++) {
-            fb_row[GLYPH_W + j] = 0x00000000;
+
         }
     }
 
@@ -224,7 +215,7 @@ void print(const char *fmt, ...) {
     va_end(list);
 }
 
-void print_init(void) {
+void print_init() {
     struct limine_framebuffer *fb = framebuffer_request.response->framebuffers[0];
     console.max_cols = (uint32_t)(fb->width / (GLYPH_W + LETTER_SPACING_PX));
     console.max_rows = (uint32_t)(fb->height / GLYPH_H);

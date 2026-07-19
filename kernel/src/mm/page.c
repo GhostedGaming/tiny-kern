@@ -72,21 +72,23 @@ uint64_t get_pml(uint8_t level, void *addr) {
     return 0;
 }
 
-uint64_t *paging_create_pml4() {
+uintptr_t paging_create_pml4() {
     uintptr_t pml4_phys = frame_alloc();
+    uint64_t *l_kernel = phys_to_virt((uintptr_t)kernel_pml4);
 
     if (!pml4_phys) {
-        return NULL;
+        return 0;
     }
 
-    uint64_t *pml4_virt = (uint64_t *)phys_to_virt(pml4_phys);
+    uint64_t *pml4_virt = phys_to_virt(pml4_phys);
+
     memset(pml4_virt, 0, PAGE_SIZE);
 
     for (int i = 256; i < 512; i++) {
-        pml4_virt[i] = kernel_pml4[i];
+        pml4_virt[i] = l_kernel[i];
     }
 
-    return (uint64_t *)pml4_phys;
+    return pml4_phys;
 }
 
 uint8_t paging_map_page(uint64_t *pml4_phys, void *virt_addr, uintptr_t phys_addr, uint64_t flags) {
