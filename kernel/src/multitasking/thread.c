@@ -16,8 +16,16 @@ struct tcb *create_thread(void *entry) {
 
     *--sp = (uintptr_t)entry;   // return address for switch_task's `ret`
     *--sp = 0x202;              // rflags (IF=1)
+    *--sp = 0;                  // rax
     *--sp = 0;                  // rbx
+    *--sp = 0;                  // rcx
+    *--sp = 0;                  // rdx
+    *--sp = 0;                  // rsi
     *--sp = 0;                  // rbp
+    *--sp = 0;                  // r8
+    *--sp = 0;                  // r9
+    *--sp = 0;                  // r10
+    *--sp = 0;                  // r11
     *--sp = 0;                  // r12
     *--sp = 0;                  // r13
     *--sp = 0;                  // r14
@@ -26,7 +34,7 @@ struct tcb *create_thread(void *entry) {
     t->ksp = sp;
     t->kstack_top = kstack + 4096;
     t->tsp = NULL;
-    t->addr_space = (void *)paging_create_pml4();
+    t->addr_space = paging_create_pml4();
     t->next = t;
     t->state = 0;
 

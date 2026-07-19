@@ -69,15 +69,13 @@ static void hcf(void) {
 
 void test() {
     for (;;) {
-        // print("Hello world! 1\n");
-        outb(0xE9, 'A');
+        print("Hello world! 1\n");
     }
 }
 
 void test1() {
     for (;;) {
-        // print("Hello world! 2\n");
-        outb(0xE9, 'B');
+        print("Hello world! 2\n");
     }
 }
 

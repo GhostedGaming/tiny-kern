@@ -133,7 +133,7 @@ uint8_t paging_map_page(uint64_t *pml4_phys, void *virt_addr, uintptr_t phys_add
 
     uint64_t *pml1 = (uint64_t *)phys_to_virt(pml2[pml2_index] & PAGE_ADDR_MASK);
     uint64_t pml1_index = get_pml(1, virt_addr);
-    pml1[pml1_index] = (phys_addr & ~0xFFFULL) | flags | PAGE_PRESENT;
+    pml1[pml1_index] = (phys_addr & PAGE_ADDR_MASK) | flags | PAGE_PRESENT;
 
     invalidate_page(virt_addr, PAGE_SIZE);
 
@@ -192,10 +192,9 @@ static uint8_t map_framebuffer(uint64_t *pml4) {
 
     struct limine_framebuffer *fb = framebuffer_request.response->framebuffers[0];
 
-    uintptr_t fb_virt_start = (uintptr_t)fb->address & ~0xFFFULL;
-    uintptr_t fb_phys_start = virt_to_phys((void *)fb_virt_start);
+    uintptr_t fb_phys_start = virt_to_phys(fb->address);
+    uintptr_t fb_virt_start = (uintptr_t)phys_to_virt(fb_phys_start) & ~0xFFFULL; 
     size_t fb_size = (size_t)fb->pitch * (size_t)fb->height;
-
     size_t fb_pages_size = (fb_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
     for (size_t off = 0; off < fb_pages_size; off += PAGE_SIZE) {
@@ -207,8 +206,11 @@ static uint8_t map_framebuffer(uint64_t *pml4) {
         }
     }
 
+    fb->address = (void*)fb_virt_start; 
+
     return 0;
 }
+
 
 uint8_t paging_init(struct limine_memmap_response *memmap, struct limine_executable_address_response *exec) {
     uintptr_t pml4 = frame_alloc();

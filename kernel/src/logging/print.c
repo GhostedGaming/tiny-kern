@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include <limine.h>
+#include <sync/spinlock.h>
 #include <mm/memory.h>
 #include <logging/format.h>
 #include <logging/print.h>
@@ -119,6 +120,8 @@ typedef struct {
 
 static console_t console = {0, 0, 0, 0, 0, 0};
 
+static spinlock_t print_lock = 0;
+
 static void new_line(void) {
     console.col = 0;
     console.row++;
@@ -209,10 +212,12 @@ static void putchar(char c) {
 }
 
 void print(const char *fmt, ...) {
+    spinlock_acquire(&print_lock);
     va_list list;
     va_start(list, fmt);
     format(putchar, fmt, list);
     va_end(list);
+    spinlock_release(&print_lock);
 }
 
 void print_init() {

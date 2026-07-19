@@ -1,5 +1,4 @@
 #include <stdint.h>
-#include <stddef.h>
 #include <stdbool.h>
 #include <limine.h>
 #include <logging/print.h>
@@ -81,24 +80,6 @@ void idt_init() {
     __asm__ volatile ("lidt %0" : : "m"(idtr));
 }
 
-static void fill_screen_red() {
-    if (framebuffer_request.response == NULL ||
-        framebuffer_request.response->framebuffer_count < 1) {
-        return;
-    }
-
-    struct limine_framebuffer* fb = framebuffer_request.response->framebuffers[0];
-    volatile uint32_t* pixels = (volatile uint32_t*)fb->address;
-    uint32_t red = 0x00AA0000;
-
-    for (size_t y = 0; y < fb->height; y++) {
-        for (size_t x = 0; x < fb->width; x++) {
-            pixels[y * (fb->pitch / 4) + x] = red;
-        }
-    }
-}
-
-__attribute__((noreturn))
 void exception_handler(uint64_t vector, uint64_t error_code, uint64_t rip) {
     uint64_t cr2, cr3, cr4, rflags, cs, ss;
 
@@ -108,8 +89,6 @@ void exception_handler(uint64_t vector, uint64_t error_code, uint64_t rip) {
     __asm__ volatile ("pushfq; pop %0" : "=r"(rflags));
     __asm__ volatile ("mov %%cs, %0" : "=r"(cs));
     __asm__ volatile ("mov %%ss, %0" : "=r"(ss));
-
-    fill_screen_red();
 
     const char* name = (vector < 32) ? exception_names[vector] : "Unknown";
 
@@ -129,7 +108,4 @@ void exception_handler(uint64_t vector, uint64_t error_code, uint64_t rip) {
     print("----------------------------------------------------------------\n");
     print("System halted.\n");
     print("================================================================\n");
-
-    __asm__ volatile ("cli; hlt");
-    for (;;) {}
 }

@@ -7,7 +7,7 @@ struct tcb {
     void *ksp;
     void *kstack_top;
     void *tsp;
-    void *addr_space;
+    uintptr_t addr_space;
     struct tcb *next;
     uint8_t state;
 };
