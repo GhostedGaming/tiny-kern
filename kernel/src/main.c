@@ -1,4 +1,5 @@
 #include "multitasking/thread.h"
+#include "portio.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -68,13 +69,15 @@ static void hcf(void) {
 
 void test() {
     for (;;) {
-        print("Hello world! 1\n");
+        // print("Hello world! 1\n");
+        outb(0xE9, 'A');
     }
 }
 
 void test1() {
     for (;;) {
-        print("Hello world! 2\n");
+        // print("Hello world! 2\n");
+        outb(0xE9, 'B');
     }
 }
 

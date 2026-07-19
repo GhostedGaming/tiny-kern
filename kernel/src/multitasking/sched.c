@@ -1,4 +1,3 @@
-#include "logging/print.h"
 #include <stddef.h>
 #include <multitasking/thread.h>
 
@@ -23,4 +22,11 @@ void schedule() {
     }
     
     switch_task(next);
+}
+
+struct tcb *sched_current_thread() {
+    if (!current_tcb) {
+        return NULL;
+    }
+    return current_tcb;
 }

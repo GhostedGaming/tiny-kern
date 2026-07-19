@@ -1,12 +1,12 @@
-#include "multitasking/thread.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <limine.h>
 #include <logging/print.h>
 #include <apic.h>
+#include <mm/page.h>
+#include <multitasking/thread.h>
 #include <idt.h>
-#include <limine.h>
-
 #define IDT_MAX_DESCRIPTORS 256
 
 extern void* isr_stub_table[];
@@ -62,8 +62,8 @@ void idt_set_descriptor(uint8_t vector, void* isr, uint8_t flags) {
     vectors[vector] = true;
 }
 
+
 void timer_handler() {
-    print(".");
     apic_eoi();
     schedule();
 }

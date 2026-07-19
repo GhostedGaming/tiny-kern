@@ -5,6 +5,7 @@ extern current_tcb
 
 struc tcb
     .ksp:         resq 1
+    .kstack:       resq 1
     .tsp:         resq 1
     .addr_space:  resq 1
     .next:        resq 1
@@ -13,7 +14,6 @@ endstruc
 
 switch_task:
     pushfq
-    cli
     push rbx
     push rbp
     push r12
@@ -48,4 +48,5 @@ switch_task:
     pop rbp
     pop rbx
     popfq
+    sti
     ret

@@ -5,6 +5,8 @@
 #include <mm/hhdm.h>
 #include <mm/page.h>
 
+extern volatile struct limine_framebuffer_request framebuffer_request;
+
 #define PAGE_SIZE 0x1000
 
 #define PAGE_PRESENT 0x1
@@ -182,6 +184,32 @@ static uint8_t map_kernel_range(uint64_t *pml4, uintptr_t virt_start, uintptr_t 
     return 0;
 }
 
+static uint8_t map_framebuffer(uint64_t *pml4) {
+    if (framebuffer_request.response == NULL ||
+        framebuffer_request.response->framebuffer_count < 1) {
+        return 0;
+    }
+
+    struct limine_framebuffer *fb = framebuffer_request.response->framebuffers[0];
+
+    uintptr_t fb_virt_start = (uintptr_t)fb->address & ~0xFFFULL;
+    uintptr_t fb_phys_start = virt_to_phys((void *)fb_virt_start);
+    size_t fb_size = (size_t)fb->pitch * (size_t)fb->height;
+
+    size_t fb_pages_size = (fb_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+    for (size_t off = 0; off < fb_pages_size; off += PAGE_SIZE) {
+        if (paging_map_page(pml4,
+                             (void *)(fb_virt_start + off),
+                             fb_phys_start + off,
+                             PAGE_WRITABLE | PAGE_NXE)) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 uint8_t paging_init(struct limine_memmap_response *memmap, struct limine_executable_address_response *exec) {
     uintptr_t pml4 = frame_alloc();
 
@@ -194,7 +222,6 @@ uint8_t paging_init(struct limine_memmap_response *memmap, struct limine_executa
     for (uint64_t i = 0; i < memmap->entry_count; i++) {
         struct limine_memmap_entry *entry = memmap->entries[i];
         if (entry->type == LIMINE_MEMMAP_USABLE 
-            || entry->type == LIMINE_MEMMAP_FRAMEBUFFER 
             || entry->type == LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE
             || entry->type == LIMINE_MEMMAP_ACPI_RECLAIMABLE
             || entry->type == LIMINE_MEMMAP_ACPI_NVS) {
@@ -207,6 +234,10 @@ uint8_t paging_init(struct limine_memmap_response *memmap, struct limine_executa
                 }
             }
         }
+    }
+
+    if (map_framebuffer((uint64_t *)pml4)) {
+        return 1;
     }
 
     if (map_kernel_range((uint64_t *)pml4,
