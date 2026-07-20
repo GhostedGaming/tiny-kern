@@ -190,6 +190,35 @@ kernel/.deps-obtained:
 	touch kernel/.deps-obtained
 	@printf "\nDependencies obtained successfully.\n"
 
+.PHONY: clone
+clone:
+	@set -e; \
+	clone_repo_commit() { \
+		repo_url="$$1"; dest="$$2"; commit="$$3"; \
+		if test -d "$$dest/.git"; then \
+			git -C "$$dest" reset --hard; \
+			git -C "$$dest" clean -fd; \
+			if ! git -C "$$dest" -c advice.detachedHead=false checkout "$$commit"; then \
+				rm -rf "$$dest"; \
+			fi; \
+		elif test -d "$$dest"; then \
+			echo "error: '$$dest' is not a Git repository" 1>&2; \
+			exit 1; \
+		fi; \
+		if ! test -d "$$dest"; then \
+			git clone "$$repo_url" "$$dest"; \
+			if ! git -C "$$dest" -c advice.detachedHead=false checkout "$$commit"; then \
+				rm -rf "$$dest"; \
+				exit 1; \
+			fi; \
+		fi; \
+	}; \
+	clone_repo_commit "$(FREESTANDING_HDRS_REPO)" kernel/freestanding-c-hdrs "$(FREESTANDING_HDRS_COMMIT)"; \
+	clone_repo_commit "$(CC_RUNTIME_REPO)" kernel/cc-runtime "$(CC_RUNTIME_COMMIT)"; \
+	clone_repo_commit "$(LIMINE_PROTOCOL_REPO)" kernel/limine-protocol "$(LIMINE_PROTOCOL_COMMIT)"; \
+	touch kernel/.deps-obtained
+	@printf "\nDependencies obtained successfully.\n"
+
 .PHONY: kernel
 kernel: kernel/.deps-obtained
 	$(MAKE) -C kernel
