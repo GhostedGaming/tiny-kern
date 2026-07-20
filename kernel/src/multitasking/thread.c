@@ -39,7 +39,7 @@ struct tcb *create_thread(void *entry) {
     t->tsp = NULL;
     t->addr_space = paging_create_pml4();
     t->next = t;
-    t->state = 0;
+    t->state = Ready;
 
     if (thread_list == NULL) {
         thread_list = t;

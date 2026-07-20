@@ -3,6 +3,12 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+typedef enum {
+    Ready,
+    Running,
+    Blocked,
+} state_t;
+
 struct tcb {
     uint64_t tid;
     void *ksp;

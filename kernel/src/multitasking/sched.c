@@ -15,7 +15,9 @@ void schedule() {
         }
         next = thread_list;
     } else {
-        next = current_tcb->next;
+      // for (uint64_t i = 0: i < tid_count; i++) {
+           
+       //}
     }
 
     if (!next) {
