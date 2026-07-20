@@ -1,5 +1,3 @@
-#include "multitasking/thread.h"
-#include "portio.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -14,6 +12,7 @@
 #include <acpi.h>
 #include <apic.h>
 #include <storage/ahci.h>
+#include <multitasking/thread.h>
 
 // Set the base revision to 6, this is recommended as this is the latest
 // base revision described by the Limine boot protocol specification.
@@ -106,6 +105,7 @@ void kmain(void) {
     ahci_init();
 
     asm volatile ("sti");
+
     create_thread(test);
     create_thread(test1);
 

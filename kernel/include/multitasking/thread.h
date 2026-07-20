@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 struct tcb {
+    uint64_t tid;
     void *ksp;
     void *kstack_top;
     void *tsp;
@@ -12,8 +13,6 @@ struct tcb {
     uint8_t state;
 };
 
-extern struct tcb *current_tcb;
 extern struct tcb *thread_list;
 
-void schedule();
 struct tcb *create_thread(void *entry);

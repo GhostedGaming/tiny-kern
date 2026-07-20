@@ -4,8 +4,9 @@
 #include <logging/print.h>
 #include <apic.h>
 #include <mm/page.h>
-#include <multitasking/thread.h>
+#include <multitasking//sched.h>
 #include <idt.h>
+
 #define IDT_MAX_DESCRIPTORS 256
 
 extern void* isr_stub_table[];

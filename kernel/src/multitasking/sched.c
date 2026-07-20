@@ -1,5 +1,6 @@
 #include <stddef.h>
 #include <multitasking/thread.h>
+#include <multitasking/sched.h>
 
 extern void switch_task(struct tcb *t);
 

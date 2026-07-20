@@ -207,17 +207,18 @@ static void putchar(char c) {
     }
 
     console.col++;
-    if (console.col >= console.max_cols)
+    if (console.col >= console.max_cols) {
         new_line();
+    }
 }
 
 void print(const char *fmt, ...) {
-    spinlock_acquire(&print_lock);
+    uint64_t flags = spinlock_acquire_irqsave(&print_lock);
     va_list list;
     va_start(list, fmt);
     format(putchar, fmt, list);
     va_end(list);
-    spinlock_release(&print_lock);
+    spinlock_release_irqrestore(&print_lock, flags);
 }
 
 void print_init() {

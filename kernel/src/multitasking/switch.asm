@@ -4,8 +4,9 @@ global switch_task
 extern current_tcb
 
 struc tcb
+    .tid:         resq 1
     .ksp:         resq 1
-    .kstack:       resq 1
+    .kstack:      resq 1
     .tsp:         resq 1
     .addr_space:  resq 1
     .next:        resq 1
