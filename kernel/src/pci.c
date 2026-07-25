@@ -148,6 +148,40 @@ void check_all_buses(void) {
     }
 }
 
+uint64_t pci_read_bar64(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset) {
+    uint32_t low = pci_config_read_dword(bus, slot, func, offset);
+    if (low & 1)
+        return 0;
+
+    uint64_t addr_low  = (uint64_t)(low & 0xfffffff0u);
+    uint64_t addr_high = (uint64_t)pci_config_read_dword(bus, slot, func, offset + 4);
+    return (addr_high << 32) | addr_low;
+}
+
+uint8_t pci_is_ahci_device(uint8_t bus, uint8_t slot, uint8_t func) {
+    uint8_t class_code = pci_config_read_byte(bus, slot, func, 0x0b);
+    uint8_t subclass   = pci_config_read_byte(bus, slot, func, 0x0a);
+    uint8_t prog_if    = pci_config_read_byte(bus, slot, func, 0x09);
+
+    return class_code == 0x01 && subclass == 0x06 && prog_if == 0x01;
+}
+
+void pci_enable_device(uint8_t bus, uint8_t slot, uint8_t func) {
+    uint16_t cmd = pci_config_read_word(bus, slot, func, 0x04);
+    cmd |= PCI_CMD_MEM_SPACE | PCI_CMD_BUS_MASTER;
+    pci_config_write_word(bus, slot, func, 0x04, cmd);
+}
+
+uint8_t pci_get_interrupt_line(uint8_t bus, uint8_t device, uint8_t function) {
+    // The Interrupt Line register is located at offset 0x3C in the configuration space
+    return pci_config_read_byte(bus, device, function, 0x3C);
+}
+
+uint8_t pci_get_interrupt_pin(uint8_t bus, uint8_t device, uint8_t function) {
+    return pci_config_read_byte(bus, device, function, 0x3D);
+}
+
+
 static void pci_log_function_id(uint8_t bus, uint8_t device, uint8_t function) {
     uint16_t vendor = pci_check_vendor(bus, device, function);
 
@@ -160,7 +194,7 @@ static void pci_log_function_id(uint8_t bus, uint8_t device, uint8_t function) {
              bus, device, function, vendor, device_id);
 }
 
-void pci_log_ids_once(void) {
+void pci_log_ids_once() {
     static bool logged = false;
 
     if (logged) {

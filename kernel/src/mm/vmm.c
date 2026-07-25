@@ -24,15 +24,9 @@ void *vmm_map_region(uint64_t *pml4_phys, void *vaddr, uint64_t flags, int pages
     node->next  = NULL;
     node->prev  = NULL;
 
-    uintptr_t frames_frame = frame_alloc();
-    if (!frames_frame) {
-        frame_free(node_frame);
-        return NULL;
-    }
-    uintptr_t *frames = (uintptr_t *)phys_to_virt(frames_frame);
-
     for (int i = 0; i < pages_needed; i++) {
         void *page_vaddr = (void *)((uint64_t)vaddr + (uint64_t)i * PAGE_SIZE);
+
         uintptr_t frame = frame_alloc();
         if (!frame) {
             goto fail;
@@ -44,7 +38,6 @@ void *vmm_map_region(uint64_t *pml4_phys, void *vaddr, uint64_t flags, int pages
             goto fail;
         }
 
-        frames[node->len] = frame;
         node->len++;
     }
 
@@ -59,16 +52,13 @@ void *vmm_map_region(uint64_t *pml4_phys, void *vaddr, uint64_t flags, int pages
     list.tail = node;
     list.count++;
 
-    frame_free(frames_frame);
     return (void *)node->base;
 
 fail:
     for (uint64_t j = 0; j < node->len; j++) {
         void *page_vaddr = (void *)((uint64_t)vaddr + j * PAGE_SIZE);
         paging_unmap_page(pml4_phys, page_vaddr);
-        frame_free(frames[j]);
     }
-    frame_free(frames_frame);
     frame_free(node_frame);
     return NULL;
 }
@@ -100,6 +90,15 @@ void vmm_free_region(uint64_t *pml4, linked_list_node_t *node) {
     list.count--;
 
     frame_free((uintptr_t)virt_to_phys((void *)node));
+}
+
+linked_list_node_t *vmm_find_region(uint64_t vaddr) {
+    for (linked_list_node_t *n = list.head; n; n = n->next) {
+        if (n->base == vaddr) {
+            return n;
+        }
+    }
+    return NULL;
 }
 
 uint8_t vmm_init() {

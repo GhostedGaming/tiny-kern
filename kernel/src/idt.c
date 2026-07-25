@@ -4,13 +4,13 @@
 #include <logging/print.h>
 #include <apic.h>
 #include <mm/page.h>
-#include <multitasking//sched.h>
 #include <idt.h>
 
 #define IDT_MAX_DESCRIPTORS 256
 
 extern void* isr_stub_table[];
 extern void apic_stub();
+extern void ahci_stub();
 extern volatile struct limine_framebuffer_request framebuffer_request;
 
 typedef struct {
@@ -60,12 +60,7 @@ void idt_set_descriptor(uint8_t vector, void* isr, uint8_t flags) {
     descriptor->reserved       = 0;
 
     vectors[vector] = true;
-}
-
-
-void timer_handler() {
-    apic_eoi();
-    schedule();
+    print("IDT entry added\nVector: %d\nISR: %X\nFlags: %X", vector, isr, flags);
 }
 
 void idt_init() {
@@ -77,8 +72,10 @@ void idt_init() {
     }
 
     idt_set_descriptor(0x20, apic_stub, 0x8E);
+    idt_set_descriptor(0x21, ahci_stub, 0x8E);
 
     __asm__ volatile ("lidt %0" : : "m"(idtr));
+    print("IDT loaded");
 }
 
 void exception_handler(uint64_t vector, uint64_t error_code, uint64_t rip) {

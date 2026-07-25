@@ -1,8 +1,10 @@
 #include <stdint.h>
 #include <mm/page.h>
 #include <mm/hhdm.h>
+#include <multitasking/sched.h>
 #include <portio.h>
 #include <acpi.h>
+#include <logging/print.h>
 #include <apic.h>
 
 #define APIC_ENABLE         0x800
@@ -110,6 +112,12 @@ uint8_t apic_init() {
     
     ioapic_set_entry(0, 0x20);
     ioapic_unmask(0);
-
+    print("APIC initialized\n");
     return 0;
+}
+
+void timer_handler() {
+    apic_eoi();
+    schedule();
+    print(".\n");
 }

@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <limine.h>
 #include <lib/errno.h>
+#include <mm/memory.h>
 #include <mm/hhdm.h>
 #include <mm/frame.h>
 
@@ -18,6 +19,7 @@ uintptr_t frame_alloc() {
     uint64_t *virt_frame = (uint64_t *)phys_to_virt((uintptr_t)phys_frame);
 
     list = (uint64_t *)(*virt_frame);
+    memset(virt_frame, 0, PAGE_SIZE);
     return (uintptr_t)phys_frame;
 }
 

@@ -77,18 +77,24 @@
 // PCI subclass codes — serial bus (class 0x0C)
 #define PCI_SUBCLASS_USB       0x03
 
+#define PCI_CMD_IO_SPACE     (1u << 0)
+#define PCI_CMD_MEM_SPACE    (1u << 1)
+#define PCI_CMD_BUS_MASTER   (1u << 2)
+
 uint32_t pci_config_read_dword(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset);
 uint16_t pci_config_read_word(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset);
 uint8_t  pci_config_read_byte(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset);
-
+uint64_t pci_read_bar64(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset);
+uint8_t pci_is_ahci_device(uint8_t bus, uint8_t slot, uint8_t func);
+void pci_enable_device(uint8_t bus, uint8_t slot, uint8_t func);
 void pci_config_write_dword(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint32_t value);
 void pci_config_write_word(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint16_t value);
-
 uint16_t pci_check_vendor(uint8_t bus, uint8_t device, uint8_t function);
 uint16_t pci_get_device_id(uint8_t bus, uint8_t device, uint8_t function);
 uint8_t  pci_get_header_type(uint8_t bus, uint8_t device, uint8_t function);
 uint8_t  pci_get_secondary_bus(uint8_t bus, uint8_t device, uint8_t function);
-
+uint8_t pci_get_interrupt_line(uint8_t bus, uint8_t device, uint8_t function);
+uint8_t pci_get_interrupt_pin(uint8_t bus, uint8_t device, uint8_t function);
 void check_function(uint8_t bus, uint8_t device, uint8_t function, uint8_t class_code, uint8_t subclass);
 void check_device(uint8_t bus, uint8_t device);
 void check_bus(uint8_t bus);

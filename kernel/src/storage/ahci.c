@@ -4,6 +4,7 @@
 #include <mm/page.h>
 #include <mm/memory.h>
 #include <pci.h>
+#include <apic.h>
 #include <storage/ahci.h>
 
 #define AHCI_GHC_AE   (1u << 31)
@@ -18,17 +19,22 @@
 
 #define AHCI_CAP2_BOH (1u << 0)
 
-#define PCI_CMD_IO_SPACE     (1u << 0)
-#define PCI_CMD_MEM_SPACE    (1u << 1)
-#define PCI_CMD_BUS_MASTER   (1u << 2)
-
 #define AHCI_SPIN_TIMEOUT_ITERS 2000000
 
 static HBA_MEM *g_abars[AHCI_MAX_CONTROLLERS];
 static uint8_t  g_abar_count = 0;
+static uint8_t  g_irq_line[AHCI_MAX_CONTROLLERS];
 static ahci_state_t g_ahci;
 static drive_t g_drives[AHCI_MAX_CONTROLLERS][AHCI_MAX_PORTS];
 static uint8_t g_identify_buf[512] __attribute__((aligned(4096)));
+
+typedef struct {
+    ahci_callback_t callback;
+    void *ctx;
+} ahci_pending_t;
+
+static ahci_pending_t g_pending[AHCI_MAX_CONTROLLERS][AHCI_MAX_PORTS][AHCI_MAX_CMD_SLOTS];
+static uint32_t g_pending_mask[AHCI_MAX_CONTROLLERS][AHCI_MAX_PORTS];
 
 static int check_type(HBA_PORT *port) {
     uint32_t ssts = port->ssts;
@@ -51,30 +57,6 @@ static int check_type(HBA_PORT *port) {
         default:
             return AHCI_DEV_SATA;
     }
-}
-
-static uint64_t pci_read_bar64(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset) {
-    uint32_t low = pci_config_read_dword(bus, slot, func, offset);
-    if (low & 1)
-        return 0;
-
-    uint64_t addr_low  = (uint64_t)(low & 0xfffffff0u);
-    uint64_t addr_high = (uint64_t)pci_config_read_dword(bus, slot, func, offset + 4);
-    return (addr_high << 32) | addr_low;
-}
-
-static uint8_t pci_is_ahci_device(uint8_t bus, uint8_t slot, uint8_t func) {
-    uint8_t class_code = pci_config_read_byte(bus, slot, func, 0x0b);
-    uint8_t subclass   = pci_config_read_byte(bus, slot, func, 0x0a);
-    uint8_t prog_if    = pci_config_read_byte(bus, slot, func, 0x09);
-
-    return class_code == 0x01 && subclass == 0x06 && prog_if == 0x01;
-}
-
-static void pci_enable_device(uint8_t bus, uint8_t slot, uint8_t func) {
-    uint16_t cmd = pci_config_read_word(bus, slot, func, 0x04);
-    cmd |= PCI_CMD_MEM_SPACE | PCI_CMD_BUS_MASTER;
-    pci_config_write_word(bus, slot, func, 0x04, cmd);
 }
 
 static void ahci_spin_delay(uint32_t iters) {
@@ -349,24 +331,23 @@ static void ahci_probe_ports(HBA_MEM *abar, uint8_t controller) {
     }
 }
 
-uint8_t ahci_read(uint8_t controller, uint8_t port, uint64_t sector, uint8_t count, void *buf) {
+static int ahci_submit(uint8_t controller, uint8_t port, uint64_t sector, uint8_t count,
+                        void *buf, uint8_t write, ahci_callback_t callback, void *ctx) {
     if (count == 0)
-        return 1;
+        return -1;
 
     if (controller >= g_abar_count || g_abars[controller] == NULL)
-        return 1;
+        return -1;
 
     HBA_PORT *hba_port = &g_abars[controller]->ports[port];
-    hba_port->is   = (uint32_t)-1;
-    hba_port->serr = (uint32_t)-1;
 
     int slot = find_cmdslot(hba_port);
     if (slot == -1)
-        return 1;
+        return -1;
 
     int prdt_entries = (count + 15) / 16;
     if (prdt_entries > AHCI_MAX_PRDT_ENTRIES)
-        return 1;
+        return -1;
 
     uint64_t clb_phys = (uint64_t)hba_port->clb | ((uint64_t)hba_port->clbu << 32);
     HBA_CMD_HEADER *cmdheader = (HBA_CMD_HEADER *)phys_to_virt(clb_phys) + slot;
@@ -379,7 +360,7 @@ uint8_t ahci_read(uint8_t controller, uint8_t port, uint64_t sector, uint8_t cou
     cmdheader->ctba  = saved_ctba;
     cmdheader->ctbau = saved_ctbau;
     cmdheader->cfl   = sizeof(FIS_REG_H2D) / sizeof(uint32_t);
-    cmdheader->w     = 0;
+    cmdheader->w     = write ? 1 : 0;
     cmdheader->prdtl = (uint16_t)prdt_entries;
     cmdheader->prdbc = 0;
 
@@ -406,7 +387,7 @@ uint8_t ahci_read(uint8_t controller, uint8_t port, uint64_t sector, uint8_t cou
     memset(cfis, 0, sizeof(*cfis));
     cfis->fis_type = FIS_TYPE_REG_H2D;
     cfis->c        = 1;
-    cfis->command  = ATA_CMD_READ_DMA_EXT;
+    cfis->command  = write ? ATA_CMD_WRITE_DMA_EXT : ATA_CMD_READ_DMA_EXT;
     cfis->lba0     = (sector >>  0) & 0xFF;
     cfis->lba1     = (sector >>  8) & 0xFF;
     cfis->lba2     = (sector >> 16) & 0xFF;
@@ -420,118 +401,70 @@ uint8_t ahci_read(uint8_t controller, uint8_t port, uint64_t sector, uint8_t cou
     uint32_t spin = 0;
     while ((hba_port->tfd & (ATA_DEV_BUSY | ATA_DEV_DRQ)) != 0) {
         if (++spin > AHCI_SPIN_TIMEOUT_ITERS)
-            return 1;
+            return -1;
     }
 
+    asm volatile ("cli");
+
+    g_pending[controller][port][slot].callback = callback;
+    g_pending[controller][port][slot].ctx = ctx;
+    g_pending_mask[controller][port] |= 1u << slot;
+
+    hba_port->is = (uint32_t)-1;
+    hba_port->serr = (uint32_t)-1;
     hba_port->ci |= 1u << slot;
 
-    spin = 0;
-    while ((hba_port->ci & (1u << slot)) != 0) {
-        if (hba_port->is & (HBA_PxIS_TFES | HBA_PxIS_HBFS | HBA_PxIS_HBDS | HBA_PxIS_IFS))
-            return 1;
-        if (++spin > AHCI_SPIN_TIMEOUT_ITERS)
-            return 1;
-    }
+    asm volatile ("sti");
 
-    if (hba_port->tfd & (ATA_DEV_BUSY | ATA_DEV_DRQ))
-        return 1;
-
-    return 0;
+    return slot;
 }
 
-uint8_t ahci_write(uint8_t controller, uint8_t port, uint64_t sector, uint8_t count, const void *buf) {
-    if (count == 0)
-        return 1;
+int ahci_read(uint8_t controller, uint8_t port, uint64_t sector, uint8_t count, void *buf,
+              ahci_callback_t callback, void *ctx) {
+    return ahci_submit(controller, port, sector, count, buf, 0, callback, ctx);
+}
 
-    if (controller >= g_abar_count || g_abars[controller] == NULL)
-        return 1;
+int ahci_write(uint8_t controller, uint8_t port, uint64_t sector, uint8_t count, const void *buf,
+               ahci_callback_t callback, void *ctx) {
+    return ahci_submit(controller, port, sector, count, (void *)buf, 1, callback, ctx);
+}
 
+static void ahci_handle_port(uint8_t controller, uint8_t port) {
     HBA_PORT *hba_port = &g_abars[controller]->ports[port];
-    hba_port->is   = (uint32_t)-1;
+
+    uint32_t is = hba_port->is;
+    if (!is)
+        return;
+
+    uint8_t err = (is & (HBA_PxIS_TFES | HBA_PxIS_HBFS | HBA_PxIS_HBDS | HBA_PxIS_IFS)) != 0;
+
+    uint32_t still_running = hba_port->ci | hba_port->sact;
+    uint32_t completed = g_pending_mask[controller][port] & ~still_running;
+
+    for (uint8_t slot = 0; slot < AHCI_MAX_CMD_SLOTS; slot++) {
+        if (!(completed & (1u << slot)))
+            continue;
+
+        ahci_callback_t callback = g_pending[controller][port][slot].callback;
+        void *ctx = g_pending[controller][port][slot].ctx;
+
+        g_pending_mask[controller][port] &= ~(1u << slot);
+        g_pending[controller][port][slot].callback = NULL;
+        g_pending[controller][port][slot].ctx = NULL;
+
+        if (callback)
+            callback(controller, port, slot, err, ctx);
+    }
+
+    hba_port->is = is;
     hba_port->serr = (uint32_t)-1;
-
-    int slot = find_cmdslot(hba_port);
-    if (slot == -1)
-        return 1;
-
-    int prdt_entries = (count + 15) / 16;
-    if (prdt_entries > AHCI_MAX_PRDT_ENTRIES)
-        return 1;
-
-    uint64_t clb_phys = (uint64_t)hba_port->clb | ((uint64_t)hba_port->clbu << 32);
-    HBA_CMD_HEADER *cmdheader = (HBA_CMD_HEADER *)phys_to_virt(clb_phys) + slot;
-
-    uint64_t ctba_phys = (uint64_t)cmdheader->ctba | ((uint64_t)cmdheader->ctbau << 32);
-
-    uint32_t saved_ctba  = cmdheader->ctba;
-    uint32_t saved_ctbau = cmdheader->ctbau;
-    memset(cmdheader, 0, sizeof(*cmdheader));
-    cmdheader->ctba  = saved_ctba;
-    cmdheader->ctbau = saved_ctbau;
-    cmdheader->cfl   = sizeof(FIS_REG_H2D) / sizeof(uint32_t);
-    cmdheader->w     = 1;
-    cmdheader->prdtl = (uint16_t)prdt_entries;
-    cmdheader->prdbc = 0;
-
-    HBA_CMD_TBL *cmdtbl = (HBA_CMD_TBL *)phys_to_virt(ctba_phys);
-    memset(cmdtbl, 0, sizeof(HBA_CMD_TBL) + (prdt_entries - 1) * sizeof(HBA_PRDT_ENTRY));
-
-    const uint8_t *buffer = buf;
-    uint8_t remaining     = count;
-    for (int i = 0; i < prdt_entries; i++) {
-        uint32_t entry_sectors = remaining > 16 ? 16 : remaining;
-        uint32_t entry_bytes   = entry_sectors * AHCI_SECTOR_SIZE;
-        uint64_t buf_phys      = virt_to_phys((void *)buffer);
-
-        cmdtbl->prdt_entry[i].dba  = (uint32_t)(buf_phys & 0xFFFFFFFF);
-        cmdtbl->prdt_entry[i].dbau = (uint32_t)(buf_phys >> 32);
-        cmdtbl->prdt_entry[i].dbc  = entry_bytes - 1;
-        cmdtbl->prdt_entry[i].i    = (i == prdt_entries - 1) ? 1 : 0;
-
-        buffer    += entry_bytes;
-        remaining -= entry_sectors;
-    }
-
-    FIS_REG_H2D *cfis = (FIS_REG_H2D *)&cmdtbl->cfis;
-    memset(cfis, 0, sizeof(*cfis));
-    cfis->fis_type = FIS_TYPE_REG_H2D;
-    cfis->c        = 1;
-    cfis->command  = ATA_CMD_WRITE_DMA_EXT;
-    cfis->lba0     = (sector >>  0) & 0xFF;
-    cfis->lba1     = (sector >>  8) & 0xFF;
-    cfis->lba2     = (sector >> 16) & 0xFF;
-    cfis->lba3     = (sector >> 24) & 0xFF;
-    cfis->lba4     = 0;
-    cfis->lba5     = 0;
-    cfis->device   = 1 << 6;
-    cfis->countl   = count & 0xFF;
-    cfis->counth   = (count >> 8) & 0xFF;
-
-    uint32_t spin = 0;
-    while ((hba_port->tfd & (ATA_DEV_BUSY | ATA_DEV_DRQ)) != 0) {
-        if (++spin > AHCI_SPIN_TIMEOUT_ITERS)
-            return 1;
-    }
-
-    hba_port->ci |= 1u << slot;
-
-    spin = 0;
-    while ((hba_port->ci & (1u << slot)) != 0) {
-        if (hba_port->is & (HBA_PxIS_TFES | HBA_PxIS_HBFS | HBA_PxIS_HBDS | HBA_PxIS_IFS))
-            return 1;
-        if (++spin > AHCI_SPIN_TIMEOUT_ITERS)
-            return 1;
-    }
-
-    if (hba_port->tfd & (ATA_DEV_BUSY | ATA_DEV_DRQ))
-        return 1;
-
-    return 0;
 }
 
 uint8_t ahci_init() {
     memset(&g_ahci, 0, sizeof(g_ahci));
     memset(g_drives, 0, sizeof(g_drives));
+    memset(g_pending, 0, sizeof(g_pending));
+    memset(g_pending_mask, 0, sizeof(g_pending_mask));
 
     for (int i = 0; i < AHCI_MAX_CONTROLLERS; i++)
         g_abars[i] = NULL;
@@ -597,6 +530,12 @@ uint8_t ahci_init() {
 
                 ahci_probe_ports(abar, ctrl_idx);
 
+                uint8_t irq = pci_get_interrupt_line(bus, slot, func);
+                ioapic_set_entry(irq, 0x21);
+                ioapic_unmask(irq);
+
+                abar->ghc |= AHCI_GHC_IE;
+
                 g_abar_count++;
             }
         }
@@ -649,4 +588,25 @@ drive_t *ahci_get_drive(uint8_t controller, uint8_t port) {
     if (!g_ahci.controllers[controller].ports[port].present)
         return NULL;
     return &g_drives[controller][port];
+}
+
+void ahci_handler() {
+    apic_eoi();
+
+    for (uint8_t c = 0; c < g_abar_count; c++) {
+        HBA_MEM *abar = g_abars[c];
+        if (!abar)
+            continue;
+
+        uint32_t pending_ports = abar->is;
+        if (!pending_ports)
+            continue;
+
+        for (uint8_t p = 0; p < AHCI_MAX_PORTS; p++) {
+            if (pending_ports & (1u << p))
+                ahci_handle_port(c, p);
+        }
+
+        abar->is = pending_ports;
+    }
 }

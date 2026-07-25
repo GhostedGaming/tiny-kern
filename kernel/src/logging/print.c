@@ -122,7 +122,7 @@ static console_t console = {0, 0, 0, 0, 0, 0};
 
 static spinlock_t print_lock = 0;
 
-static void new_line(void) {
+static void new_line() {
     console.col = 0;
     console.row++;
 
@@ -212,12 +212,23 @@ static void putchar(char c) {
     }
 }
 
-void print(const char *fmt, ...) {
+static void print_string(const char *s) {
+    while (*s) {
+        putchar(*s++);
+    }
+}
+
+void print_impl(const char *caller, const char *fmt, ...) {
     uint64_t flags = spinlock_acquire_irqsave(&print_lock);
+
+    print_string(caller);
+    print_string("(): ");
+
     va_list list;
     va_start(list, fmt);
     format(putchar, fmt, list);
     va_end(list);
+
     spinlock_release_irqrestore(&print_lock, flags);
 }
 

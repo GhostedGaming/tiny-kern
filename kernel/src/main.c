@@ -12,6 +12,7 @@
 #include <acpi.h>
 #include <apic.h>
 #include <storage/ahci.h>
+#include <storage/disk_writer.h>
 #include <multitasking/thread.h>
 
 // Set the base revision to 6, this is recommended as this is the latest
@@ -68,13 +69,19 @@ static void hcf(void) {
 
 void test() {
     for (;;) {
+        int i  = 0;
         print("Hello world! 1\n");
+        disk_writer(0, 2, i, 1, "Hello world!");
+        i++;
     }
 }
 
 void test1() {
     for (;;) {
+        int i  = 20;
         print("Hello world! 2\n");
+        disk_writer(0, 2, i, 1, "Hello world!");
+        i++;
     }
 }
 
@@ -97,9 +104,9 @@ void kmain(void) {
     hhdm_init(hhdm_request.response->offset);
     frame_init(memmap_request.response);
     paging_init(memmap_request.response, executable_request.response);
+    print_init();
     vmm_init();
     idt_init();
-    print_init();
     acpi_parse_tables();
     apic_init();
     ahci_init();

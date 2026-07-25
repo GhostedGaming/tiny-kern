@@ -8,11 +8,15 @@
 
 struct tcb *thread_list = NULL;
 
-uint64_t tid = 0;
+uint64_t thread_count = 0;
 
 struct tcb *create_thread(void *entry) {
     struct tcb *t = phys_to_virt(frame_alloc());
     uint8_t *kstack = phys_to_virt(frame_alloc());
+
+    if (!t || !kstack) {
+        return NULL;
+    }
 
     uintptr_t *sp = (uintptr_t *)(kstack + 4096);
 
@@ -33,7 +37,7 @@ struct tcb *create_thread(void *entry) {
     *--sp = 0;                  // r14
     *--sp = 0;                  // r15
 
-    t->tid = tid++;
+    t->tid = thread_count++;
     t->ksp = sp;
     t->kstack_top = kstack + 4096;
     t->tsp = NULL;

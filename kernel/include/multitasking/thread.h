@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+extern uint64_t thread_count;
+
 typedef enum {
     Ready,
     Running,
