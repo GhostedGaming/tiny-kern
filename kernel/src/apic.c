@@ -119,5 +119,4 @@ uint8_t apic_init() {
 void timer_handler() {
     apic_eoi();
     schedule();
-    print(".\n");
 }

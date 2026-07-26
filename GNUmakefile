@@ -11,7 +11,7 @@ override IMAGE_NAME := template-$(ARCH)
 
 # Toolchain for building the 'limine' executable for the host.
 HOST_CC := cc
-HOST_CFLAGS := -g -O2 -pipe
+HOST_CFLAGS := -g -O2 -pipe -c23
 HOST_CPPFLAGS := 
 HOST_LDFLAGS :=
 HOST_LIBS :=

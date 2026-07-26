@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stddef.h>
+#include <logging/print.h>
 #include <mm/frame.h>
 #include <mm/hhdm.h>
 #include <mm/page.h>
@@ -9,11 +10,13 @@ static linked_list_t list;
 
 void *vmm_map_region(uint64_t *pml4_phys, void *vaddr, uint64_t flags, int pages_needed) {
     if (!pml4_phys || !vaddr || pages_needed <= 0) {
+        print("vmm_map_region: bad args pml4=%X vaddr=%X pages=%d\n", pml4_phys, vaddr, pages_needed);
         return NULL;
     }
 
     uintptr_t node_frame = frame_alloc();
     if (!node_frame) {
+        print("vmm_map_region: frame_alloc failed for node\n");
         return NULL;
     }
 
@@ -29,11 +32,13 @@ void *vmm_map_region(uint64_t *pml4_phys, void *vaddr, uint64_t flags, int pages
 
         uintptr_t frame = frame_alloc();
         if (!frame) {
+            print("vmm_map_region: frame_alloc failed at page %d/%d\n", i, pages_needed);
             goto fail;
         }
 
         uint8_t ok = paging_map_page(pml4_phys, page_vaddr, frame, flags);
         if (!ok) {
+            print("vmm_map_region: paging_map_page failed vaddr=%X frame=0x%lx\n", page_vaddr, (unsigned long)frame);
             frame_free(frame);
             goto fail;
         }

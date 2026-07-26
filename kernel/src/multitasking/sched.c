@@ -52,6 +52,7 @@ struct tcb *sched_current_thread() {
         print("Couldn't get the current TCB\n");
         return NULL;
     }
+    print("Current TCB\nTID: %d\n", current_tcb->tid);
     return current_tcb;
 }
 
