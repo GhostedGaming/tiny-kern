@@ -23,7 +23,6 @@
 
 static HBA_MEM *g_abars[AHCI_MAX_CONTROLLERS];
 static uint8_t  g_abar_count = 0;
-static uint8_t  g_irq_line[AHCI_MAX_CONTROLLERS];
 static ahci_state_t g_ahci;
 static drive_t g_drives[AHCI_MAX_CONTROLLERS][AHCI_MAX_PORTS];
 static uint8_t g_identify_buf[512] __attribute__((aligned(4096)));

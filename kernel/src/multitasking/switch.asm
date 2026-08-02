@@ -30,7 +30,7 @@ switch_task:
     push r14
     push r15
 
-    mov rax, [rel current_tcb]
+    mov rax, [rel current_tcb] 
     test rax, rax
     jz .first_switch
 

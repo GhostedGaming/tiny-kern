@@ -2,11 +2,10 @@
 #include <stdint.h>
 #include <logging/print.h>
 #include <sync/spinlock.h>
+#include <mm/hhdm.h>
 #include <mm/page.h>
 #include <mm/frame.h>
 #include <mm/heap.h>
-
-#define HHDM_OFFSET 0xFFFF800000000000UL 
 
 typedef struct kmalloc_header {
     size_t size;
@@ -16,8 +15,6 @@ typedef struct kmalloc_header {
 
 static kmalloc_header_t *free_list_head = NULL;
 static spinlock_t heap_lock = 0;
-
-#define FRAME_TO_HHDM(phys) ((void*)((uintptr_t)(phys) + HHDM_OFFSET))
 
 void *kmalloc(uintptr_t size) {
     if (size == 0) {
@@ -67,7 +64,7 @@ void *kmalloc(uintptr_t size) {
 
     print("Allocated fresh frame %X\n", phys_frame);
 
-    kmalloc_header_t *new_chunk = (kmalloc_header_t*)FRAME_TO_HHDM(phys_frame);
+    kmalloc_header_t *new_chunk = (kmalloc_header_t*)phys_to_virt(phys_frame);
     new_chunk->size = PAGE_SIZE - sizeof(kmalloc_header_t);
     new_chunk->is_free = 0;
     new_chunk->next = NULL;

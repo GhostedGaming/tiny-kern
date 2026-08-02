@@ -4,6 +4,7 @@ extern exception_handler
 extern timer_handler
 extern ahci_handler
 
+global ahci_stub
 global isr_stub_table
 global apic_stub
 
@@ -104,9 +105,6 @@ apic_stub:
     pop rax
 
     iretq
-
-extern ahci_handler
-global ahci_stub
 
 ahci_stub:
     push rax

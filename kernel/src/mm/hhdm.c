@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include <mm/hhdm.h>
 
-static uint64_t hhdm_offset;
+uint64_t hhdm_offset;
 
 void hhdm_init(uint64_t offset) {
     hhdm_offset = offset;
