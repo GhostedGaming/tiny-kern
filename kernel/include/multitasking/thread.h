@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <multitasking/proc.h>
 
 extern uint64_t thread_count;
 
@@ -18,9 +19,11 @@ struct tcb {
     void *tsp;
     uintptr_t addr_space;
     struct tcb *next;
+    struct tcb *proc_next;
+    struct pcb *parent;
     uint8_t state;
-};
+} __attribute__((packed));
 
 extern struct tcb *thread_list;
 
-struct tcb *create_thread(void *entry);
+struct tcb *create_thread(void *entry, struct pcb *p, void *ustack);

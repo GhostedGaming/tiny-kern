@@ -3,46 +3,51 @@
 #include <mm/frame.h>
 #include <mm/page.h>
 #include <mm/hhdm.h>
+#include <mm/heap.h>
 #include <logging/print.h>
+#include <multitasking/proc.h>
 #include <multitasking/thread.h>
+
+#define KSTACK_SIZE 0x10000
 
 struct tcb *thread_list = NULL;
 
 uint64_t thread_count = 0;
 
-struct tcb *create_thread(void *entry) {
-    struct tcb *t = phys_to_virt(frame_alloc());
-    uint8_t *kstack = phys_to_virt(frame_alloc());
+struct tcb *create_thread(void *entry, struct pcb *p, void *ustack) {
+    struct tcb *t = (struct tcb *)kmalloc(sizeof(struct tcb));
+    uint8_t *kstack = kmalloc(KSTACK_SIZE);
 
-    if (!t || !kstack) {
+    if (!t || !kstack || !ustack) {
         return NULL;
     }
 
-    uintptr_t *sp = (uintptr_t *)(kstack + 4096);
+    uintptr_t *sp = (uintptr_t *)(kstack + KSTACK_SIZE);
 
-    *--sp = (uintptr_t)entry;   // return address for switch_task's `ret`
-    *--sp = 0x202;              // rflags (IF=1)
-    *--sp = 0;                  // rax
-    *--sp = 0;                  // rbx
-    *--sp = 0;                  // rcx
-    *--sp = 0;                  // rdx
-    *--sp = 0;                  // rsi
-    *--sp = 0;                  // rbp
-    *--sp = 0;                  // r8
-    *--sp = 0;                  // r9
-    *--sp = 0;                  // r10
-    *--sp = 0;                  // r11
-    *--sp = 0;                  // r12
-    *--sp = 0;                  // r13
-    *--sp = 0;                  // r14
-    *--sp = 0;                  // r15
+    *--sp = (uintptr_t)entry;
+    *--sp = 0x202;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
 
     t->tid = thread_count++;
     t->ksp = sp;
-    t->kstack_top = kstack + 4096;
-    t->tsp = NULL;
-    t->addr_space = paging_create_pml4();
-    t->next = t;
+    t->kstack_top = kstack + KSTACK_SIZE;
+    t->tsp = ustack;
+    t->addr_space = p->addr_space;
+    t->parent = p;
     t->state = Ready;
 
     if (thread_list == NULL) {
@@ -52,6 +57,16 @@ struct tcb *create_thread(void *entry) {
         t->next = thread_list->next;
         thread_list->next = t;
     }
+
+    if (p->t == NULL) {
+        p->t = t;
+        t->proc_next = t;
+    } else {
+        t->proc_next = p->t->proc_next;
+        p->t->proc_next = t;
+    }
+
+    p->t_count++;
 
     return t;
 }

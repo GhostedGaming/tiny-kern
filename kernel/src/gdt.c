@@ -7,11 +7,9 @@ uint8_t gdt_table[8][8] = {0};
 
 struct tss {
     uint32_t reserved0;
-    uint32_t reserved0_hi;
     uint64_t rsp0;
     uint64_t rsp1;
     uint64_t rsp2;
-    uint64_t reserved1;
     uint64_t ist1;
     uint64_t ist2;
     uint64_t ist3;
@@ -19,9 +17,7 @@ struct tss {
     uint64_t ist5;
     uint64_t ist6;
     uint64_t ist7;
-    uint64_t reserved2;
-    uint64_t reserved3;
-    uint16_t reserved4;
+    uint64_t reserved1;
     uint16_t iomap_base;
 } __attribute__ ((packed));
 
@@ -90,4 +86,8 @@ void gdt_init() {
     uint16_t tss_selector = 0x28;
     asm volatile ("ltr %0" :: "r"(tss_selector));
     reload();
+}
+
+void tss_set_kernel_stack(uintptr_t rsp0) {
+    global_tss.rsp0 = rsp0;
 }

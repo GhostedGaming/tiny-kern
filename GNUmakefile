@@ -39,12 +39,18 @@ run: run-$(ARCH)
 run-hdd: run-hdd-$(ARCH)
 
 .PHONY: run-x86_64
-run-x86_64: edk2-ovmf-bins $(IMAGE_NAME).iso
+run-x86_64: edk2-ovmf-bins $(IMAGE_NAME).iso disk.img
 	qemu-system-$(ARCH) \
 		-M q35 \
 		-drive if=pflash,unit=0,format=raw,file=edk2-ovmf-bins/ovmf-code-$(ARCH).fd,readonly=on \
 		-cdrom $(IMAGE_NAME).iso \
+		-drive id=disk0,if=none,format=raw,file=disk.img \
+		-device ahci,id=ahci0 \
+		-device ide-hd,drive=disk0,bus=ahci0.0 \
 		$(QEMUFLAGS)
+
+disk.img:
+	dd if=/dev/zero of=disk.img bs=1M count=64
 
 .PHONY: run-hdd-x86_64
 run-hdd-x86_64: edk2-ovmf-bins $(IMAGE_NAME).hdd

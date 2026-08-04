@@ -1,5 +1,5 @@
-#include "logging/print.h"
 #include <stddef.h>
+#include <logging/print.h>
 #include <multitasking/thread.h>
 #include <multitasking/sched.h>
 
@@ -11,8 +11,6 @@ struct blocked_list {
 extern void switch_task(struct tcb *t);
 
 struct tcb *current_tcb = NULL;
-
-struct blocked_list *blocked = NULL;
 
 void schedule() {
     if (!thread_list) {
@@ -37,11 +35,15 @@ void schedule() {
     struct tcb *t = current_tcb->next;
     for (uint64_t i = 0; i < thread_count; i++) {
         if (t->state == Ready) {
-            current_tcb->state = Ready;
+            if (current_tcb->state == Running) {
+                current_tcb->state = Ready;
+            }
             t->state = Running;
             print("Switching to task %d\n", t->tid);
             switch_task(t);
             return;
+        } else {
+            print("Tid: %d, State: %d\n", t->tid, t->state);
         }
         t = t->next;
     }
@@ -57,7 +59,10 @@ struct tcb *sched_current_thread() {
 }
 
 struct tcb *block_current() {
+    asm volatile ("cli");
     current_tcb->state = Blocked;
+    asm volatile ("sti");
+
     struct tcb *t = current_tcb;
     print("Blocking %d\n", t->tid);
     schedule();
@@ -65,6 +70,8 @@ struct tcb *block_current() {
 }
 
 void unblock(struct tcb *t) {
+    asm volatile ("cli");
     t->state = Ready;
+    asm volatile ("sti");
     print("Unblocking %d\n", t->tid);
 }

@@ -2,6 +2,7 @@
 
 global switch_task
 extern current_tcb
+extern tss_set_kernel_stack
 
 struc tcb
     .tid:         resq 1
@@ -10,6 +11,8 @@ struc tcb
     .tsp:         resq 1
     .addr_space:  resq 1
     .next:        resq 1
+    .proc_next:   resq 1
+    .parent:      resq 1
     .state:       resb 1
 endstruc
 
@@ -19,6 +22,7 @@ switch_task:
     push rbx
     push rcx
     push rdx
+    push rdi
     push rsi
     push rbp
     push r8
@@ -30,7 +34,7 @@ switch_task:
     push r14
     push r15
 
-    mov rax, [rel current_tcb] 
+    mov rax, [rel current_tcb]
     test rax, rax
     jz .first_switch
 
@@ -38,6 +42,13 @@ switch_task:
 
 .first_switch:
     mov [rel current_tcb], rdi
+
+    push rdi
+    mov rdi, [rdi + tcb.kstack]
+    sub rsp, 8
+    call tss_set_kernel_stack
+    add rsp, 8
+    pop rdi
 
     mov rsp, [rdi + tcb.ksp]
 
@@ -60,10 +71,10 @@ switch_task:
     pop r8
     pop rbp
     pop rsi
+    pop rdi
     pop rdx
     pop rcx
     pop rbx
     pop rax
     popfq
-    sti
     ret

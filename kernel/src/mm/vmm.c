@@ -37,7 +37,7 @@ void *vmm_map_region(uint64_t *pml4_phys, void *vaddr, uint64_t flags, int pages
         }
 
         uint8_t ok = paging_map_page(pml4_phys, page_vaddr, frame, flags);
-        if (!ok) {
+        if (ok) {
             print("vmm_map_region: paging_map_page failed vaddr=%X frame=0x%lx\n", page_vaddr, (unsigned long)frame);
             frame_free(frame);
             goto fail;

@@ -12,9 +12,14 @@
 #include <mm/frame.h>
 #include <mm/page.h>
 #include <mm/vmm.h>
+#include <mm/memory.h>
 #include <storage/ahci.h>
 #include <storage/disk_writer.h>
+#include <storage/drive_map.h>
+#include <fs/devfs.h>
+#include <fs/vfs.h>
 #include <multitasking/thread.h>
+#include <multitasking/proc.h>
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(6);
@@ -56,41 +61,55 @@ static void hcf(void) {
 }
 
 void test() {
-	int i = 0;
-	for (;;) {
-		void *buf = kmalloc(1024);
-		if (!buf) {
-			print("Out of memory at iteration %d\n", i);
-			for (;;);
-		}
+    int i = 0;
+    for (;;) {
+        void *buf = kmalloc(1024);
+        if (!buf) {
+            print("Out of memory at iteration %d\n", i);
+            for (;;);
+        }
+        memset(buf, 0, 1024);
 
-		print("Hello world! 1\n");
-		disk_writer(0, 0, i, 1, "Hello world!");
-		disk_reader(0, 0, i, 1, buf);
-		print("Buf contents: %s\n", (char *)buf);
+        print("Hello world! 1\n");
 
-		kfree(buf);
-		i++;
-	}
+        uint8_t write_status = disk_writer(0, i, 1, "Hello world!");
+        print("disk_writer status=%u sector=%d\n", write_status, i);
+
+        uint8_t read_status = disk_reader(0, i, 1, buf);
+        print("disk_reader status=%u sector=%d\n", read_status, i);
+
+        ((char *)buf)[511] = '\0';
+        print("Read from disk sector=%d: \"%s\"\n", i, (char *)buf);
+
+        kfree(buf);
+        i++;
+    }
 }
 
 void test1() {
-	int i = 20;
-	for (;;) {
-		void *buf = kmalloc(1024);
-		if (!buf) {
-			print("Out of memory at iteration %d\n", i);
-			for (;;);
-		}
+    int i = 20;
+    for (;;) {
+        void *buf = kmalloc(1024);
+        if (!buf) {
+            print("Out of memory at iteration %d\n", i);
+            for (;;);
+        }
+        memset(buf, 0, 1024);
 
-		print("Hello world! 2\n");
-		disk_writer(0, 0, i, 1, "Hello world!");
-		disk_reader(0, 0, i, 1, buf);
-		print("Buf contents: %s\n", (char *)buf);
+        print("Hello world! 2\n");
 
-		kfree(buf);
-		i++;
-	}
+        uint8_t write_status = disk_writer(0, i, 1, "Hello world!");
+        print("disk_writer status=%u sector=%d\n", write_status, i);
+
+        uint8_t read_status = disk_reader(0, i, 1, buf);
+        print("disk_reader status=%u sector=%d\n", read_status, i);
+
+        ((char *)buf)[511] = '\0';
+        print("Read from disk sector=%d: \"%s\"\n", i, (char *)buf);
+
+        kfree(buf);
+        i++;
+    }
 }
 
 void kmain(void) {
@@ -113,11 +132,20 @@ void kmain(void) {
 	acpi_parse_tables();
 	apic_init();
 	ahci_init();
+	drive_map_init();
+    vfs_init();
+    devfs_init();
+
+	struct pcb *p = proc_create(test);
+    if (!p) {
+        print("proc_create FAILED\n");
+        hcf();
+    } else {
+        print("proc_create OK, pid=%lu\n", p->pid);
+    }
+	proc_create(test1);
 
 	asm volatile ("sti");
-
-	create_thread(test);
-	create_thread(test1);
 
 	hcf();
 }

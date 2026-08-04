@@ -2,4 +2,5 @@
 /edk2-ovmf-bins
 *.iso
 *.hdd
+*.img
 *.json

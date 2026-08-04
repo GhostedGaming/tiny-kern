@@ -158,7 +158,7 @@ static uint8_t stop_cmd(HBA_PORT *port) {
     return 0;
 }
 
-static uint8_t port_rebase(HBA_PORT *port, int portno) {
+static int port_rebase(HBA_PORT *port, int portno) {
     print("rebasing port=%d\n", portno);
 
     if (stop_cmd(port) != 0) {
@@ -168,15 +168,31 @@ static uint8_t port_rebase(HBA_PORT *port, int portno) {
 
     uint64_t phys_clb = AHCI_BASE + (portno << 10);
     uint64_t virt_clb = (uint64_t)phys_to_virt((uintptr_t)phys_clb);
+
+    // Ensure CLB is aligned to 4096 bytes
+    if ((virt_clb & 0xFFF) != 0) {
+        phys_clb += 4096 - (virt_clb & 0xFFF);
+        virt_clb = (uint64_t)phys_to_virt((uintptr_t)phys_clb);
+    }
+
     port->clb  = (uint32_t)(phys_clb & 0xFFFFFFFF);
     port->clbu = (uint32_t)(phys_clb >> 32);
+
     memset((void *)virt_clb, 0, 1024);
     print("port %d clb phys=0x%lx virt=0x%lx\n", portno, (unsigned long)phys_clb, (unsigned long)virt_clb);
 
     uint64_t phys_fb = AHCI_BASE + (32 << 10) + (portno << 8);
     uint64_t virt_fb = (uint64_t)phys_to_virt((uintptr_t)phys_fb);
+
+    // Ensure FB is aligned to 4096 bytes
+    if ((virt_fb & 0xFFF) != 0) {
+        phys_fb += 4096 - (virt_fb & 0xFFF);
+        virt_fb = (uint64_t)phys_to_virt((uintptr_t)phys_fb);
+    }
+
     port->fb  = (uint32_t)(phys_fb & 0xFFFFFFFF);
     port->fbu = (uint32_t)(phys_fb >> 32);
+
     memset((void *)virt_fb, 0, 256);
     print("port %d fb phys=0x%lx virt=0x%lx\n", portno, (unsigned long)phys_fb, (unsigned long)virt_fb);
 
@@ -190,6 +206,12 @@ static uint8_t port_rebase(HBA_PORT *port, int portno) {
     for (int i = 0; i < 32; i++) {
         uint64_t phys_ctba = AHCI_BASE + (40 << 10) + (portno << 13) + (i << 8);
         uint64_t virt_ctba = (uint64_t)phys_to_virt((uintptr_t)phys_ctba);
+
+        if ((virt_ctba & 0xFFF) != 0) {
+            phys_ctba += 4096 - (virt_ctba & 0xFFF);
+            virt_ctba = (uint64_t)phys_to_virt((uintptr_t)phys_ctba);
+        }
+
         cmdheader[i].prdtl = AHCI_CMD_TBL_PRDT_ENTRIES;
         cmdheader[i].ctba  = (uint32_t)(phys_ctba & 0xFFFFFFFF);
         cmdheader[i].ctbau = (uint32_t)(phys_ctba >> 32);
@@ -397,7 +419,7 @@ static void ahci_probe_ports(HBA_MEM *abar, uint8_t controller) {
 }
 
 static int ahci_submit(uint8_t controller, uint8_t port, uint64_t sector, uint8_t count,
-                        void *buf, uint8_t write, ahci_callback_t callback, void *ctx) {
+                     void *buf, uint8_t write, ahci_callback_t callback, void *ctx) {
     print("submit controller=%u port=%u sector=%lu count=%u write=%u\n",
              controller, port, (unsigned long)sector, count, write);
 
@@ -416,17 +438,20 @@ static int ahci_submit(uint8_t controller, uint8_t port, uint64_t sector, uint8_
         return -1;
     }
 
-    HBA_PORT *hba_port = &g_abars[controller]->ports[port];
-
-    int slot = find_cmdslot(hba_port);
-    if (slot == -1) {
-        print("no free command slot controller=%u port=%u\n", controller, port);
-        return -1;
-    }
-
     int prdt_entries = (count + 15) / 16;
     if (prdt_entries > AHCI_MAX_PRDT_ENTRIES) {
         print("too many prdt entries %d\n", prdt_entries);
+        return -1;
+    }
+
+    HBA_PORT *hba_port = &g_abars[controller]->ports[port];
+
+    asm volatile ("cli");
+
+    int slot = find_cmdslot(hba_port);
+    if (slot == -1) {
+        asm volatile ("sti");
+        print("no free command slot controller=%u port=%u\n", controller, port);
         return -1;
     }
 
@@ -484,12 +509,11 @@ static int ahci_submit(uint8_t controller, uint8_t port, uint64_t sector, uint8_
     uint32_t spin = 0;
     while ((hba_port->tfd & (ATA_DEV_BUSY | ATA_DEV_DRQ)) != 0) {
         if (++spin > AHCI_SPIN_TIMEOUT_ITERS) {
+            asm volatile ("sti");
             print("timed out waiting for BSY/DRQ clear, tfd=0x%x\n", hba_port->tfd);
             return -1;
         }
     }
-
-    asm volatile ("cli");
 
     g_pending[controller][port][slot].callback = callback;
     g_pending[controller][port][slot].ctx = ctx;
@@ -551,6 +575,10 @@ static void ahci_handle_port(uint8_t controller, uint8_t port) {
     uint32_t still_running = hba_port->ci | hba_port->sact;
     uint32_t completed = g_pending_mask[controller][port] & ~still_running;
 
+    if (err) {
+        completed |= g_pending_mask[controller][port];
+    }
+
     print("pending=0x%x still_running=0x%x completed=0x%x\n",
              g_pending_mask[controller][port], still_running, completed);
 
@@ -565,7 +593,7 @@ static void ahci_handle_port(uint8_t controller, uint8_t port) {
         g_pending[controller][port][slot].callback = NULL;
         g_pending[controller][port][slot].ctx = NULL;
 
-        print("completing slot=%u err=%u callback=%p\n", slot, err, (void *)callback);
+        print("completing slot=%u err=%u callback=%X\n", slot, err, (void *)callback);
 
         if (callback)
             callback(controller, port, slot, err, ctx);
@@ -577,6 +605,8 @@ static void ahci_handle_port(uint8_t controller, uint8_t port) {
     if (err) {
         stop_cmd(hba_port);
         start_cmd(hba_port);
+        hba_port->ci = 0;
+        hba_port->sact = 0;
         g_pending_mask[controller][port] = 0;
         print("recovered command engine controller=%u port=%u\n", controller, port);
     }

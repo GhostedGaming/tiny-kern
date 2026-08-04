@@ -88,21 +88,23 @@ void exception_handler(uint64_t vector, uint64_t error_code, uint64_t rip) {
     __asm__ volatile ("mov %%cs, %0" : "=r"(cs));
     __asm__ volatile ("mov %%ss, %0" : "=r"(ss));
 
-    const char* name = (vector < 32) ? exception_names[vector] : "Unknown";
+    const char* name = "Unknown";
+    if (vector < 32) {
+        name = exception_names[vector];
+    }
 
-    print("\n");
-    print("================================================================\n");
+    print("\n================================================================\n");
     print("                        KERNEL PANIC\n");
     print("================================================================\n");
-    print("Exception : %s (vector %llu)\n", name, vector);
-    print("Error Code: 0x%016llx\n", error_code);
-    print("RIP       : 0x%016llx\n", rip);
-    print("CR2       : 0x%016llx\n", cr2);
-    print("CR3       : 0x%016llx\n", cr3);
-    print("CR4       : 0x%016llx\n", cr4);
-    print("RFLAGS    : 0x%016llx\n", rflags);
-    print("CS        : 0x%04llx\n", cs);
-    print("SS        : 0x%04llx\n", ss);
+    print("Exception : %s (vector %lu)\n", name, (unsigned long)vector);
+    print("Error Code: 0x%016lx\n", (unsigned long)error_code);
+    print("RIP       : 0x%016lx\n", (unsigned long)rip);
+    print("CR2       : 0x%016lx\n", (unsigned long)cr2);
+    print("CR3       : 0x%016lx\n", (unsigned long)cr3);
+    print("CR4       : 0x%016lx\n", (unsigned long)cr4);
+    print("RFLAGS    : 0x%016lx\n", (unsigned long)rflags);
+    print("CS        : 0x%04lx\n",  (unsigned long)cs);
+    print("SS        : 0x%04lx\n",  (unsigned long)ss);
     print("----------------------------------------------------------------\n");
     print("System halted.\n");
     print("================================================================\n");

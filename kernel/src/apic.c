@@ -8,7 +8,6 @@
 #include <apic.h>
 
 #define APIC_ENABLE         0x800
-
 #define APIC_SVR            0xF0
 #define APIC_LVT_TIMER      0x320
 #define APIC_TIMER_DIV      0x3E0
@@ -16,8 +15,9 @@
 #define APIC_TIMER_CUR      0x390
 
 #define IOAPICREDTBL(n)     (0x10 + 2 * (n))
-
 #define IOAPIC_MASKED       (1ULL << 16)
+#define IOAPIC_TRIGGER_LEVEL (1ULL << 15)
+#define IOAPIC_POLARITY_LOW  (1ULL << 13)
 
 uint64_t apic_count = 0x100000;
 
@@ -67,7 +67,13 @@ void apic_eoi() {
 }
 
 void ioapic_set_entry(uint8_t irq, uint8_t vector) {
+    uint32_t lapic_id = apic_read(0x20) >> 24;
+
     uint64_t entry = vector;
+    entry |= IOAPIC_TRIGGER_LEVEL;
+    entry |= IOAPIC_POLARITY_LOW;
+    entry |= ((uint64_t)lapic_id << 56);
+
     ioapic_write(IOAPICREDTBL(irq), entry);
 }
 
