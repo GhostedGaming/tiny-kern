@@ -303,14 +303,14 @@ char *vfs_getcwd(char *buf, size_t size) {
     return buf;
 }
 
-static int find_letter_slot(char letter) {
+static int find_letter_slot(char *name) {
     for (int i = 0; i < mount_count; i++)
-        if (mount_table[i].letter == letter) return i;
+        if (mount_table[i].name == name) return i;
     return -1;
 }
 
-vfs_mount_t *vfs_get_mount(char letter) {
-    int slot = find_letter_slot(letter);
+vfs_mount_t *vfs_get_mount(char *name) {
+    int slot = find_letter_slot(name);
     return (slot < 0) ? NULL : &mount_table[slot];
 }
 
@@ -525,8 +525,7 @@ static vfs_node_ops_t fat16_ops = {
     .readlink = NULL,
 };
 
-uint8_t vfs_mount(char letter, uint8_t drive_number) {
-    if (find_letter_slot(letter) >= 0) return VFS_ERR_LETTER_IN_USE;
+uint8_t vfs_mount(char *name, uint8_t drive_number) {
     if (mount_count >= MAX_DRIVES) return VFS_ERR_NO_SLOTS;
 
     uint8_t controller, port;
@@ -534,7 +533,7 @@ uint8_t vfs_mount(char letter, uint8_t drive_number) {
 
     ahci_controller_t *c = ahci_get_controller(controller);
     if (!c || !c->ports[port].present) return VFS_ERR_INVALID_DEV;
-    if (c->ports[port].assigned_letter != 0) return VFS_ERR_ALREADY_MOUNTED;
+    if (c->ports[port].assigned_name != 0) return VFS_ERR_ALREADY_MOUNTED;
 
     vfs_blockdev_priv_t *priv = kmalloc(sizeof(vfs_blockdev_priv_t));
     if (!priv) return VFS_ERR_NO_SLOTS;
@@ -551,8 +550,7 @@ uint8_t vfs_mount(char letter, uint8_t drive_number) {
     void *vol_ptr = fat16_init(&blockdev);
     if (!vol_ptr) { kfree(priv); return VFS_ERR_FS_INIT; }
 
-    char mnt_name[3] = { letter, ':', '\0' };
-    vfs_node_t *mp_outer = vfs_node_alloc(mnt_name, VFS_NODE_MOUNTPOINT);
+    vfs_node_t *mp_outer = vfs_node_alloc(name, VFS_NODE_MOUNTPOINT);
     if (!mp_outer) { kfree(priv); return VFS_ERR_NO_SLOTS; }
 
     vfs_fat16_priv_t *fat_priv = kmalloc(sizeof(vfs_fat16_priv_t));
@@ -571,32 +569,29 @@ uint8_t vfs_mount(char letter, uint8_t drive_number) {
     root_dir->parent = mp_outer;
     vfs_node_link_child(vfs_root, mp_outer);
 
-    mount_table[mount_count].letter = letter;
+    mount_table[mount_count].name = name;
     mount_table[mount_count].blockdev = blockdev;
     mount_table[mount_count].drive_number = drive_number;
     mount_table[mount_count].priv = vol_ptr;
     mount_count++;
 
-    c->ports[port].assigned_letter = letter;
+    c->ports[port].assigned_name = name;
 
     return VFS_OK;
 }
 
-void vfs_unmount(char letter) {
-    int slot = find_letter_slot(letter);
-    if (slot < 0) return;
-
+void vfs_unmount(char *name) {
+    int slot = find_letter_slot(name);
     vfs_mount_t *m = &mount_table[slot];
     vfs_blockdev_priv_t *bpriv = (vfs_blockdev_priv_t *)m->blockdev.priv;
 
     uint8_t controller, port;
     if (drive_map_resolve(m->drive_number, &controller, &port) == 0) {
         ahci_controller_t *c = ahci_get_controller(controller);
-        if (c) c->ports[port].assigned_letter = 0;
+        if (c) c->ports[port].assigned_name = 0;
     }
 
-    char mnt_name[3] = { letter, ':', '\0' };
-    vfs_node_t *mp = vfs_node_find_child(vfs_root, mnt_name);
+    vfs_node_t *mp = vfs_node_find_child(vfs_root, name);
     if (mp) {
         vfs_node_unlink_child(vfs_root, mp);
         kfree(mp);
@@ -1187,15 +1182,6 @@ uint8_t vfs_init() {
 
     devfs_init();
     vfs_fd_table_setup_stdio(kernel_fd_table, MAX_FD);
-
-    char letter = 'C';
-    uint8_t drive_count = drive_map_count();
-    for (uint8_t d = 0; d < drive_count; d++) {
-        if (letter > 'Z') return VFS_ERR_NO_SLOTS;
-        uint8_t err = vfs_mount(letter, d);
-        if (err == VFS_ERR_NO_SLOTS) return VFS_ERR_NO_SLOTS;
-        letter++;
-    }
 
     return VFS_OK;
 }

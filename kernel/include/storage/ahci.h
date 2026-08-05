@@ -221,7 +221,7 @@ typedef struct {
 typedef struct {
     uint8_t type;
     uint8_t present;
-    char    assigned_letter;
+    char    *assigned_name;
 } ahci_port_info_t;
 
 typedef struct {

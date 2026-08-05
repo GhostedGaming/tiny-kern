@@ -39,6 +39,10 @@ extern char __data_start[], __data_end[];
 
 typedef uint64_t page_entry_t;
 
+static inline uintptr_t get_current_cr3() {
+    
+}
+
 static void invalidate_page(void *addr, uint64_t len) {
     for (uint64_t i = 0; i < len; i += 0x1000) {
         asm volatile("invlpg (%0)" : : "r"(addr + i) : "memory");
@@ -91,6 +95,16 @@ uintptr_t paging_create_pml4() {
     }
 
     return pml4_phys;
+}
+
+uintptr_t fork_address_space() {
+    uintptr_t pml4 = frame_alloc();
+    uintptr_t current_pml4 = 0;
+    if (!pml4) {
+        return 0;
+    }
+
+    current_pml4 = 
 }
 
 uint8_t paging_map_page(uint64_t *pml4_phys, void *virt_addr, uintptr_t phys_addr, uint64_t flags) {

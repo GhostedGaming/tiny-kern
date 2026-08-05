@@ -1,4 +1,3 @@
-#include "tty.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -23,6 +22,7 @@
 #include <multitasking/proc.h>
 #include <multitasking/sched.h>
 #include <binary_loaders/elf.h>
+#include <tty.h>
 
 extern void putchar(tty_t *tty, char c);
 extern void jump_to_user(uint64_t entry, uint64_t stack);
@@ -133,6 +133,8 @@ void kmain() {
     vfs_init();
     devfs_init();
     tty_init(putchar);
+
+    vfs_mount("drive0", 0);
 
     if (module_request.response != NULL
         && module_request.response->module_count > 0) {

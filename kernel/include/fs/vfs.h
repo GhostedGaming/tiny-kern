@@ -159,7 +159,7 @@ typedef struct {
 } vfs_dir_t;
 
 typedef struct {
-    char letter;
+    char *name;
     vfs_blockdev_t blockdev;
     uint8_t drive_number;
     void *priv;
@@ -184,9 +184,9 @@ vfs_node_t *vfs_resolve_path(const char *path);
 vfs_node_t *vfs_resolve_parent(const char *path, char *name_out);
 
 uint8_t vfs_init();
-uint8_t vfs_mount(char letter, uint8_t drive_number);
-void vfs_unmount(char letter);
-vfs_mount_t *vfs_get_mount(char letter);
+uint8_t vfs_mount(char *name, uint8_t drive_number);
+void vfs_unmount(char *name);
+vfs_mount_t *vfs_get_mount(char *name);
 vfs_node_t *vfs_get_root();
 int vfs_chdir(const char *path);
 char *vfs_getcwd(char *buf, size_t size);

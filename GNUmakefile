@@ -5,7 +5,7 @@
 ARCH := x86_64
 
 # Default user QEMU flags. These are appended to the QEMU command calls.
-QEMUFLAGS := -m 2G -d int -device isa-debugcon,chardev=debug -chardev stdio,id=debug
+QEMUFLAGS := -m 2G -d int -device isa-debugcon,chardev=debug -chardev stdio,id=debug -display none
 
 override IMAGE_NAME := template-$(ARCH)
 

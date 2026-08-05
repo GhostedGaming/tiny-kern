@@ -1,6 +1,3 @@
-#define SYS_EXIT  0
-#define SYS_WRITE 1
-
 static inline long syscall3(long num, long a1, long a2, long a3) {
     long ret;
     asm volatile ("int $0x80"
@@ -11,9 +8,6 @@ static inline long syscall3(long num, long a1, long a2, long a3) {
 }
 
 void _start() {
-    const char *msg = "init: running in usermode\n";
-    syscall3(SYS_WRITE, 1, (long)msg, 27);
-    syscall3(SYS_EXIT, 0, 0, 0);
     for (;;) {
         asm volatile ("pause");
     }
