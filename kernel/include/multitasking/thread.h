@@ -10,6 +10,7 @@ typedef enum {
     Ready,
     Running,
     Blocked,
+    Exited,
 } state_t;
 
 struct tcb {
@@ -27,3 +28,4 @@ struct tcb {
 extern struct tcb *thread_list;
 
 struct tcb *create_thread(void *entry, struct pcb *p, void *ustack);
+void destroy_thread(struct tcb *t);

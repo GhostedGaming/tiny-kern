@@ -168,12 +168,13 @@ void parse_madt_entries(struct madt *madt) {
 }
 
 void acpi_parse_tables() {
-	uint8_t acpi_rev = rsdp_request.response->revision;
 	void *rsdp_addr = rsdp_request.response->address;
 	struct xsdp *rsdp = (struct xsdp *)phys_to_virt(frame_alloc());
 
 	print("Filling struct\n");
-	memcpy(rsdp, rsdp_addr, acpi_rev > 0 ? sizeof(struct xsdp) : sizeof(struct xsdp) - 16);
+	uint8_t acpi_rev = *(uint8_t *)((char *)rsdp_addr + 15);
+	size_t rsdp_size = acpi_rev >= 2 ? sizeof(struct xsdp) : sizeof(struct xsdp) - 16;
+	memcpy(rsdp, rsdp_addr, rsdp_size);
 
 	print("RSDP_ADDR: 0x%X\nACPI_REV: %d, RSDP_SIG: %s\nRSDT_ADDR: 0x%X\n", rsdp_addr, acpi_rev, rsdp->signature, rsdp->rsdt);
 

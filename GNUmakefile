@@ -229,10 +229,15 @@ clone:
 kernel: kernel/.deps-obtained
 	$(MAKE) -C kernel
 
-$(IMAGE_NAME).iso: limine-binary/limine kernel
+test_programs.tar: test_programs/GNUmakefile $(wildcard test_programs/*.c test_programs/*.ld)
+	$(MAKE) -C test_programs
+	tar --format=ustar -C test_programs -cf $@ .
+
+$(IMAGE_NAME).iso: limine-binary/limine kernel test_programs.tar
 	rm -rf iso_root
 	mkdir -p iso_root/boot
 	cp -v kernel/bin-$(ARCH)/kernel iso_root/boot/
+	cp -v test_programs.tar iso_root/
 	mkdir -p iso_root/boot/limine
 	cp -v limine.conf iso_root/boot/limine/
 	mkdir -p iso_root/EFI/BOOT

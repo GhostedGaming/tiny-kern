@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <mm/page.h>
+#include <mm/frame.h>
 #include <mm/vmm.h>
 #include <mm/heap.h>
 #include <fs/vfs.h>
@@ -26,6 +27,7 @@ struct pcb *proc_create(void *entry) {
     p->t = NULL;
     p->heap_begin = USER_HEAP_START;
     p->heap_end = USER_HEAP_START;
+    p->exit_code = 0;
 
     vfs_fd_table_init(p->fd_table, MAX_FDS);
     vfs_fd_table_setup_stdio(p->fd_table, MAX_FDS);
@@ -98,5 +100,26 @@ uintptr_t proc_sbrk(struct pcb *p, intptr_t increment) {
 
 void proc_destroy(struct pcb *p) {
     vfs_fd_table_close(p->fd_table, MAX_FDS);
+
+    while (p->t != NULL) {
+        destroy_thread(p->t);
+    }
+
+    if (proc_list) {
+        if (proc_list->next == proc_list) {
+            proc_list = NULL;
+        } else {
+            struct pcb *prev = proc_list;
+            while (prev->next != p) {
+                prev = prev->next;
+            }
+            prev->next = p->next;
+            if (proc_list == p) {
+                proc_list = p->next;
+            }
+        }
+    }
+
+    frame_free(p->addr_space);
     kfree(p);
 }

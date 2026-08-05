@@ -3,10 +3,12 @@
 extern exception_handler
 extern timer_handler
 extern ahci_handler
+extern syscall_handler
 
 global ahci_stub
 global isr_stub_table
 global apic_stub
+global int128_handler
 
 isr_stub_table:
 %assign i 0
@@ -103,7 +105,6 @@ apic_stub:
     pop rcx
     pop rbx
     pop rax
-
     iretq
 
 ahci_stub:
@@ -136,4 +137,34 @@ ahci_stub:
     pop rcx
     pop rbx
     pop rax
+    iretq
+
+int128_handler:
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    push rsi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    call syscall_handler
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rbx
     iretq

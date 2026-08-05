@@ -70,3 +70,42 @@ struct tcb *create_thread(void *entry, struct pcb *p, void *ustack) {
 
     return t;
 }
+
+void destroy_thread(struct tcb *t) {
+    if (!t) {
+        return;
+    }
+
+    struct pcb *p = t->parent;
+
+    if (thread_list->next == thread_list) {
+        thread_list = NULL;
+    } else {
+        struct tcb *prev = thread_list;
+        while (prev->next != t) {
+            prev = prev->next;
+        }
+        prev->next = t->next;
+        if (thread_list == t) {
+            thread_list = t->next;
+        }
+    }
+
+    if (p->t->proc_next == p->t) {
+        p->t = NULL;
+    } else {
+        struct tcb *prev = p->t;
+        while (prev->proc_next != t) {
+            prev = prev->proc_next;
+        }
+        prev->proc_next = t->proc_next;
+        if (p->t == t) {
+            p->t = t->proc_next;
+        }
+    }
+
+    p->t_count--;
+
+    kfree(t->kstack_top - KSTACK_SIZE);
+    kfree(t);
+}

@@ -11,6 +11,7 @@ struct pcb {
     struct tcb *t;
     uintptr_t heap_begin;
     uintptr_t heap_end;
+    uint64_t exit_code;
     struct pcb *next;
     struct vfs_file *fd_table[MAX_FDS];
 };

@@ -13,15 +13,21 @@ typedef long off_t;
 #define VFS_ERR_ALREADY_MOUNTED 4
 #define VFS_ERR_FS_INIT 5
 
+#define EPERM 1
 #define ENOENT 2
 #define EBADF 9
+#define EAGAIN 11
 #define EACCES 13
 #define EEXIST 17
 #define ENOTDIR 20
 #define EISDIR 21
 #define EINVAL 22
 #define ENFILE 23
+#define EMFILE 24
 #define ENOSPC 28
+#define EROFS 30
+#define EPIPE 32
+#define ENAMETOOLONG 36
 #define ENOTEMPTY 39
 
 #define VFS_NODE_FILE 0
@@ -31,6 +37,7 @@ typedef long off_t;
 #define VFS_NODE_SYMLINK 4
 #define VFS_NODE_PIPE 5
 
+#define O_ACCMODE 0x0003
 #define O_RDONLY 0x0000
 #define O_WRONLY 0x0001
 #define O_RDWR 0x0002
@@ -39,6 +46,11 @@ typedef long off_t;
 #define O_APPEND 0x0400
 #define O_DIRECTORY 0x4000
 #define O_EXCL 0x0800
+
+#define F_OK 0
+#define X_OK 1
+#define W_OK 2
+#define R_OK 4
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -171,7 +183,7 @@ vfs_node_t *vfs_node_find_child(vfs_node_t *parent, const char *name);
 vfs_node_t *vfs_resolve_path(const char *path);
 vfs_node_t *vfs_resolve_parent(const char *path, char *name_out);
 
-uint8_t vfs_init(void);
+uint8_t vfs_init();
 uint8_t vfs_mount(char letter, uint8_t drive_number);
 void vfs_unmount(char letter);
 vfs_mount_t *vfs_get_mount(char letter);

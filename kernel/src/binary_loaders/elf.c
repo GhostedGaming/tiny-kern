@@ -41,7 +41,7 @@ uint64_t elf64_parse(int fd, uintptr_t cr3) {
         return 0;
     }
 
-    uint64_t *pml4 = (uint64_t *)phys_to_virt(cr3);
+    uint64_t *pml4 = (uint64_t *)cr3;
     Elf64_Phdr *ph = (Elf64_Phdr *)((uint8_t *)elf + eh->e_phoff);
 
     for (int i = 0; i < eh->e_phnum; i++) {

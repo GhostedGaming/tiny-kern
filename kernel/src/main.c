@@ -1,3 +1,4 @@
+#include "tty.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -14,12 +15,55 @@
 #include <mm/vmm.h>
 #include <mm/memory.h>
 #include <storage/ahci.h>
-#include <storage/disk_writer.h>
 #include <storage/drive_map.h>
 #include <fs/devfs.h>
 #include <fs/vfs.h>
+#include <fs/ustar.h>
 #include <multitasking/thread.h>
 #include <multitasking/proc.h>
+#include <multitasking/sched.h>
+#include <binary_loaders/elf.h>
+
+extern void putchar(tty_t *tty, char c);
+extern void jump_to_user(uint64_t entry, uint64_t stack);
+
+#define USER_STACK_TOP 0x0000700000000000UL
+
+static uint64_t g_init_entry;
+
+static void init_thread_entry() {
+    jump_to_user(g_init_entry, USER_STACK_TOP);
+    print("init: jump_to_user returned\n");
+    for (;;) asm volatile ("hlt");
+}
+
+static void run_init() {
+    int fd = open("/ram/bins/init", O_RDONLY);
+    if (fd < 0) {
+        print("init: open(/ram/bins/init) failed errno=%d\n", errno);
+        return;
+    }
+
+    struct pcb *p = proc_create(init_thread_entry);
+    if (!p) {
+        print("init: proc_create failed\n");
+        close(fd);
+        return;
+    }
+
+    uint64_t entry = elf64_parse(fd, p->addr_space);
+    close(fd);
+    if (!entry) {
+        print("init: elf64_parse failed\n");
+        return;
+    }
+
+    g_init_entry = entry;
+    print("init: loaded /ram/bins/init entry=0x%lX pid=%lu\n", entry, p->pid);
+
+    schedule();
+    print("init: scheduler returned\n");
+}
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(6);
@@ -48,71 +92,25 @@ static volatile struct limine_executable_address_request executable_request = {
 	.revision = 0
 };
 
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_module_request module_request = {
+	.id = LIMINE_MODULE_REQUEST_ID,
+	.revision = 0
+};
+
 __attribute__((used, section(".limine_requests_start")))
 static volatile uint64_t limine_requests_start_marker[] = LIMINE_REQUESTS_START_MARKER;
 
 __attribute__((used, section(".limine_requests_end")))
 static volatile uint64_t limine_requests_end_marker[] = LIMINE_REQUESTS_END_MARKER;
 
-static void hcf(void) {
+static void hcf() {
 	for (;;) {
 		asm ("hlt");
 	}
 }
 
-void test() {
-    int i = 0;
-    for (;;) {
-        void *buf = kmalloc(1024);
-        if (!buf) {
-            print("Out of memory at iteration %d\n", i);
-            for (;;);
-        }
-        memset(buf, 0, 1024);
-
-        print("Hello world! 1\n");
-
-        uint8_t write_status = disk_writer(0, i, 1, "Hello world!");
-        print("disk_writer status=%u sector=%d\n", write_status, i);
-
-        uint8_t read_status = disk_reader(0, i, 1, buf);
-        print("disk_reader status=%u sector=%d\n", read_status, i);
-
-        ((char *)buf)[511] = '\0';
-        print("Read from disk sector=%d: \"%s\"\n", i, (char *)buf);
-
-        kfree(buf);
-        i++;
-    }
-}
-
-void test1() {
-    int i = 20;
-    for (;;) {
-        void *buf = kmalloc(1024);
-        if (!buf) {
-            print("Out of memory at iteration %d\n", i);
-            for (;;);
-        }
-        memset(buf, 0, 1024);
-
-        print("Hello world! 2\n");
-
-        uint8_t write_status = disk_writer(0, i, 1, "Hello world!");
-        print("disk_writer status=%u sector=%d\n", write_status, i);
-
-        uint8_t read_status = disk_reader(0, i, 1, buf);
-        print("disk_reader status=%u sector=%d\n", read_status, i);
-
-        ((char *)buf)[511] = '\0';
-        print("Read from disk sector=%d: \"%s\"\n", i, (char *)buf);
-
-        kfree(buf);
-        i++;
-    }
-}
-
-void kmain(void) {
+void kmain() {
 	if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false) {
 		hcf();
 	}
@@ -126,7 +124,6 @@ void kmain(void) {
 	hhdm_init(hhdm_request.response->offset);
 	frame_init(memmap_request.response);
 	paging_init(memmap_request.response, executable_request.response);
-	print_init();
 	vmm_init();
 	idt_init();
 	acpi_parse_tables();
@@ -135,15 +132,18 @@ void kmain(void) {
 	drive_map_init();
     vfs_init();
     devfs_init();
+    tty_init(putchar);
 
-	struct pcb *p = proc_create(test);
-    if (!p) {
-        print("proc_create FAILED\n");
-        hcf();
+    if (module_request.response != NULL
+        && module_request.response->module_count > 0) {
+        struct limine_file *mod = module_request.response->modules[0];
+        void *img = mod->address;
+        uint8_t rc = ustar_mount("/ram", img, mod->size);
+        print("ram: mounted %s -> status %u\n", mod->path, rc);
+        run_init();
     } else {
-        print("proc_create OK, pid=%lu\n", p->pid);
+        print("ram: no Limine modules loaded\n");
     }
-	proc_create(test1);
 
 	asm volatile ("sti");
 

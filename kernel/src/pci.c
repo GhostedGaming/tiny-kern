@@ -141,7 +141,7 @@ void check_bus(uint8_t bus) {
 }
 
 // Enumerate all 256 buses and all 32 device slots on each
-void check_all_buses(void) {
+void check_all_buses() {
     uint16_t bus;
     for (bus = 0; bus < 256; bus++) {
         check_bus((uint8_t)bus);

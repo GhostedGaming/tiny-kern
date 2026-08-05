@@ -12,7 +12,33 @@ extern void switch_task(struct tcb *t);
 
 struct tcb *current_tcb = NULL;
 
+static void reap_exited() {
+    if (!thread_list) {
+        return;
+    }
+
+    struct tcb *r = thread_list;
+    do {
+        struct tcb *next = r->next;
+        if (r->state == Exited && r != current_tcb) {
+            struct pcb *parent = r->parent;
+            destroy_thread(r);
+            if (parent && parent->t_count == 0 && parent->t == NULL) {
+                proc_destroy(parent);
+            }
+            if (!thread_list) {
+                return;
+            }
+            r = next;
+        } else {
+            r = next;
+        }
+    } while (r != thread_list);
+}
+
 void schedule() {
+    reap_exited();
+
     if (!thread_list) {
         print("No threads to switch to\n");
         return;
@@ -56,6 +82,15 @@ struct tcb *sched_current_thread() {
     }
     print("Current TCB\nTID: %d\n", current_tcb->tid);
     return current_tcb;
+}
+
+struct pcb *sched_current_proc() {
+    if (!current_tcb || !current_tcb->parent) {
+        print("Couldn't get the current PCB\n");
+        return NULL;
+    }
+
+    return current_tcb->parent;
 }
 
 struct tcb *block_current() {

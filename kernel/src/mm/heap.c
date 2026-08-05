@@ -30,23 +30,24 @@ void *kmalloc(uintptr_t size) {
     size_t total_needed = size + sizeof(kmalloc_header_t);
     if (total_needed > PAGE_SIZE) {
         uint64_t frames = (total_needed + PAGE_SIZE - 1) / PAGE_SIZE;
-        uintptr_t base = 0;
+        uintptr_t top = 0;
         uintptr_t expected = 0;
         for (uint64_t i = 0; i < frames; i++) {
             uintptr_t f = frame_alloc();
             if (!f || (i > 0 && f != expected)) {
                 if (f) frame_free(f);
                 for (uint64_t j = 0; j < i; j++)
-                    frame_free(base - j * PAGE_SIZE);
+                    frame_free(top - j * PAGE_SIZE);
                 print("kmalloc: failed to allocate %d contiguous frames\n", (int)frames);
                 spinlock_release_irqrestore(&heap_lock, flags);
                 return NULL;
             }
-            if (i == 0) base = f;
+            if (i == 0) top = f;
             expected = f - PAGE_SIZE;
         }
 
-        kmalloc_header_t *chunk = (kmalloc_header_t *)phys_to_virt(base);
+        uintptr_t start = top - (frames - 1) * PAGE_SIZE;
+        kmalloc_header_t *chunk = (kmalloc_header_t *)phys_to_virt(start);
         memset(chunk, 0, PAGE_SIZE * frames);
         chunk->size = size;
         chunk->is_free = 0;
@@ -134,9 +135,13 @@ void kfree(void *addr) {
     print("Marking block at %X free, size %d\n", header, header->size);
 
     if (header->frames > 1) {
+        kmalloc_header_t **pp = &free_list_head;
+        while (*pp && *pp != header) pp = &(*pp)->next;
+        if (*pp == header) *pp = header->next;
+
         uintptr_t phys = virt_to_phys((void *)header);
         for (uint64_t i = 0; i < header->frames; i++)
-            frame_free(phys - i * PAGE_SIZE);
+            frame_free(phys + i * PAGE_SIZE);
         print("Freed %d frames at %X\n", (int)header->frames, phys);
         spinlock_release_irqrestore(&heap_lock, flags);
         return;

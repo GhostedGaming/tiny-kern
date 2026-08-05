@@ -103,13 +103,14 @@ static void vfs_file_unref(vfs_file_t *file) {
 }
 
 vfs_node_t *vfs_node_alloc(const char *name, uint32_t type) {
+    size_t len = strlen(name);
+    if (len >= MAX_NAME_LEN) { errno = ENAMETOOLONG; return NULL; }
+
     vfs_node_t *node = kmalloc(sizeof(vfs_node_t));
     if (!node) { 
         errno = ENOSPC; return NULL; 
     }
     memset(node, 0, sizeof(vfs_node_t));
-    size_t len = strlen(name);
-    if (len >= MAX_NAME_LEN) len = MAX_NAME_LEN - 1;
     memcpy(node->name, name, len);
     node->name[len]  = '\0';
     node->type       = type;
@@ -166,14 +167,20 @@ static vfs_node_t *resolve_from(vfs_node_t *start, const char *path) {
         char component[MAX_NAME_LEN];
         size_t len = 0;
         while (*p && *p != '/') {
-            if (len < MAX_NAME_LEN - 1) component[len++] = *p;
+            if (len >= MAX_NAME_LEN - 1) { errno = ENAMETOOLONG; return NULL; }
+            component[len++] = *p;
             p++;
         }
         component[len] = '\0';
 
         if (strcmp(component, ".") == 0)  continue;
         if (strcmp(component, "..") == 0) {
-            if (node->parent) node = node->parent;
+            if (node->parent) {
+                vfs_node_t *p = node->parent;
+                if (p->type == VFS_NODE_MOUNTPOINT && p->parent)
+                    p = p->parent;
+                node = p;
+            }
             continue;
         }
 
@@ -209,6 +216,7 @@ static vfs_node_t *resolve_from(vfs_node_t *start, const char *path) {
 
 vfs_node_t *vfs_resolve_path(const char *path) {
     if (!path) { errno = EINVAL; return NULL; }
+    if (path[0] == '\0') { errno = ENOENT; return NULL; }
     if (path[0] == '/')
         return resolve_from(vfs_root, path + 1);
     if (vfs_cwd)
@@ -232,7 +240,7 @@ vfs_node_t *vfs_resolve_parent(const char *path, char *name_out) {
     if (name_out) {
         const char *base = last_slash ? last_slash + 1 : buf;
         size_t nlen = strlen(base);
-        if (nlen >= MAX_NAME_LEN) nlen = MAX_NAME_LEN - 1;
+        if (nlen >= MAX_NAME_LEN) { errno = ENAMETOOLONG; return NULL; }
         memcpy(name_out, base, nlen);
         name_out[nlen] = '\0';
     }
@@ -560,6 +568,7 @@ uint8_t vfs_mount(char letter, uint8_t drive_number) {
     root_dir->ops = &fat16_ops;
 
     mp_outer->priv = root_dir;
+    root_dir->parent = mp_outer;
     vfs_node_link_child(vfs_root, mp_outer);
 
     mount_table[mount_count].letter = letter;
@@ -597,6 +606,12 @@ void vfs_unmount(char letter) {
 
     for (int i = slot; i < mount_count - 1; i++) mount_table[i] = mount_table[i + 1];
     mount_count--;
+}
+
+static int path_ends_with_slash(const char *path) {
+    if (!path || *path == '\0') return 0;
+    size_t len = strlen(path);
+    return path[len - 1] == '/';
 }
 
 static void node_to_stat(vfs_node_t *node, vfs_stat_t *st) {
@@ -654,6 +669,9 @@ int open(const char *path, int flags, ...) {
         if ((flags & O_DIRECTORY) && node->type != VFS_NODE_DIR) { errno = ENOTDIR; return -1; }
     }
 
+    if (node->type == VFS_NODE_DIR && (flags & (O_WRONLY | O_RDWR))) { errno = EISDIR; return -1; }
+    if (path_ends_with_slash(path) && node->type != VFS_NODE_DIR) { errno = ENOTDIR; return -1; }
+
     if ((flags & O_TRUNC) && node->type == VFS_NODE_FILE) {
         if (node->ops && node->ops->truncate) node->ops->truncate(node, 0);
         else node->size = 0;
@@ -687,13 +705,15 @@ ssize_t read(int fd, void *buf, size_t count) {
     if (!buf) { errno = EINVAL; return -1; }
     if (!count) return 0;
 
-    if ((file->flags & O_WRONLY) && !(file->flags & O_RDWR)) {
-        errno = EACCES;
+    if ((file->flags & O_ACCMODE) == O_WRONLY) {
+        errno = EBADF;
         return -1;
     }
 
     vfs_node_t *node = file->node;
     if (!node) { errno = EBADF; return -1; }
+
+    if (node->type == VFS_NODE_DIR) { errno = EISDIR; return -1; }
 
     if (node->type == VFS_NODE_DEV) {
         devfs_dev_t *ddev = (devfs_dev_t *)node->priv;
@@ -718,11 +738,13 @@ ssize_t write(int fd, const void *buf, size_t count) {
     if (!buf) { errno = EINVAL; return -1; }
     if (!count) return 0;
 
-    int acc = file->flags & (O_WRONLY | O_RDWR);
-    if (acc == O_RDONLY) { errno = EACCES; return -1; }
+    int acc = file->flags & O_ACCMODE;
+    if (acc == O_RDONLY) { errno = EBADF; return -1; }
 
     vfs_node_t *node = file->node;
     if (!node) { errno = EBADF; return -1; }
+
+    if (node->type == VFS_NODE_DIR) { errno = EISDIR; return -1; }
 
     if (file->flags & O_APPEND) file->offset = (off_t)node->size;
 
@@ -823,6 +845,8 @@ int mkdir(const char *path, uint32_t mode) {
         if (inner) parent = inner;
     }
 
+    if (parent->type != VFS_NODE_DIR) { errno = ENOTDIR; return -1; }
+
     if (vfs_node_find_child(parent, name)) { errno = EEXIST; return -1; }
 
     if (parent->ops && parent->ops->create)
@@ -839,6 +863,13 @@ int rmdir(const char *path) {
     char name[MAX_NAME_LEN];
     vfs_node_t *parent = vfs_resolve_parent(path, name);
     if (!parent) return -1;
+
+    if (parent->type == VFS_NODE_MOUNTPOINT) {
+        vfs_node_t *inner = (vfs_node_t *)parent->priv;
+        if (inner) parent = inner;
+    }
+
+    if (parent->type != VFS_NODE_DIR) { errno = ENOTDIR; return -1; }
 
     vfs_node_t *target = vfs_node_find_child(parent, name);
     if (target) {
@@ -867,6 +898,7 @@ int unlink(const char *path) {
     if (!parent) return -1;
 
     vfs_node_t *target = vfs_node_find_child(parent, name);
+    if (target && target->type == VFS_NODE_DIR) { errno = EISDIR; return -1; }
 
     if (parent->ops && parent->ops->unlink) {
         int ret = parent->ops->unlink(parent, name);
@@ -1029,6 +1061,7 @@ vfs_dir_t *opendir(const char *path) {
 
 vfs_dirent_t *readdir(vfs_dir_t *dir) {
     if (!dir || !dir->node) { errno = EBADF; return NULL; }
+    if (dir->node->type != VFS_NODE_DIR) { errno = ENOTDIR; return NULL; }
 
     static vfs_dirent_t ent;
 
@@ -1167,7 +1200,7 @@ uint8_t vfs_init() {
     return VFS_OK;
 }
 
-vfs_node_t *vfs_get_root(void) {
+vfs_node_t *vfs_get_root() {
     return vfs_root;
 }
 

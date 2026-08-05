@@ -6,6 +6,7 @@
 #include <fs/vfs.h>
 #include <fs/devfs.h>
 #include <tty.h>
+#include <logging/print.h>
 
 #define GLYPH_W 8
 #define GLYPH_H 8
