@@ -57,9 +57,9 @@ void _start() {
 
     long pid4 = syscall3(SYS_FORK, 0, 0, 0);
     if (pid4 == 0) {
-        char *argv[] = { "tier_a_test", 0 };
+        char *argv[] = { "all_test", 0 };
         char *envp[] = { 0 };
-        syscall3(SYS_EXECVE, (long)"/ram/bins/tier_a_test", (long)argv, (long)envp);
+        syscall3(SYS_EXECVE, (long)"/ram/bins/all_test", (long)argv, (long)envp);
         for (;;) {
             asm volatile ("pause");
         }

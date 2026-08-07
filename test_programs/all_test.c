@@ -125,33 +125,33 @@ static int fail(const char *s) {
 }
 
 void _start() {
-    write_str("tier_a_test: start\n");
+    write_str("all_test: start\n");
 
     struct stat st;
     if (syscall3(SYS_STAT, (long)"/ram/bins/init", (long)&st, 0) != 0)
-        fail("tier_a_test: FAIL stat\n");
+        fail("all_test: FAIL stat\n");
     if ((st.st_mode & S_IFMT) != S_IFREG)
-        fail("tier_a_test: FAIL stat mode\n");
+        fail("all_test: FAIL stat mode\n");
     if (st.st_size <= 0)
-        fail("tier_a_test: FAIL stat size\n");
-    write_str("tier_a_test: stat OK\n");
+        fail("all_test: FAIL stat size\n");
+    write_str("all_test: stat OK\n");
 
     if (syscall3(SYS_LSTAT, (long)"/ram/bins", (long)&st, 0) != 0)
-        fail("tier_a_test: FAIL lstat\n");
+        fail("all_test: FAIL lstat\n");
     if ((st.st_mode & S_IFMT) != (040000))
-        fail("tier_a_test: FAIL lstat dir mode\n");
-    write_str("tier_a_test: lstat OK\n");
+        fail("all_test: FAIL lstat dir mode\n");
+    write_str("all_test: lstat OK\n");
 
     if (syscall4(SYS_NEWFSTATAT, -100, (long)"/ram/bins/init", (long)&st, 0) != 0)
-        fail("tier_a_test: FAIL fstatat\n");
-    write_str("tier_a_test: fstatat OK\n");
+        fail("all_test: FAIL fstatat\n");
+    write_str("all_test: fstatat OK\n");
 
     long fd = syscall3(SYS_OPEN, (long)"/ram/bins/init", O_RDONLY, 0);
     if (fd < 0)
-        fail("tier_a_test: FAIL open\n");
+        fail("all_test: FAIL open\n");
     if (syscall3(SYS_FSTAT, fd, (long)&st, 0) != 0)
-        fail("tier_a_test: FAIL fstat\n");
-    write_str("tier_a_test: fstat OK\n");
+        fail("all_test: FAIL fstat\n");
+    write_str("all_test: fstat OK\n");
 
     char rbuf[64];
     struct iovec rv[2];
@@ -161,24 +161,24 @@ void _start() {
     rv[1].iov_len = 16;
     long n = syscall6(SYS_READV, fd, (long)rv, 2, 0, 0, 0);
     if (n != 32)
-        fail("tier_a_test: FAIL readv\n");
-    write_str("tier_a_test: readv OK\n");
+        fail("all_test: FAIL readv\n");
+    write_str("all_test: readv OK\n");
 
     struct iovec wv[2];
-    const char *part1 = "tier_a_test: writev part1\n";
-    const char *part2 = "tier_a_test: writev part2\n";
+    const char *part1 = "all_test: writev part1\n";
+    const char *part2 = "all_test: writev part2\n";
     wv[0].iov_base = (void *)part1;
     wv[0].iov_len = 24;
     wv[1].iov_base = (void *)part2;
     wv[1].iov_len = 24;
     n = syscall6(SYS_WRITEV, 1, (long)wv, 2, 0, 0, 0);
     if (n != 48)
-        fail("tier_a_test: FAIL writev\n");
+        fail("all_test: FAIL writev\n");
     syscall3(SYS_CLOSE, fd, 0, 0);
 
     fd = syscall3(SYS_OPEN, (long)"/ram/bins", O_RDONLY, 0);
     if (fd < 0)
-        fail("tier_a_test: FAIL open dir\n");
+        fail("all_test: FAIL open dir\n");
     char dbuf[512];
     long found = 0;
     long total = 0;
@@ -199,71 +199,71 @@ void _start() {
     }
     syscall3(SYS_CLOSE, fd, 0, 0);
     if (!found || total < 5)
-        fail("tier_a_test: FAIL getdents64\n");
-    write_str("tier_a_test: getdents64 OK\n");
+        fail("all_test: FAIL getdents64\n");
+    write_str("all_test: getdents64 OK\n");
 
     long uid = syscall3(SYS_GETUID, 0, 0, 0);
     long gid = syscall3(SYS_GETGID, 0, 0, 0);
     long euid = syscall3(SYS_GETEUID, 0, 0, 0);
     long egid = syscall3(SYS_GETEGID, 0, 0, 0);
     if (uid != 0 || gid != 0 || euid != 0 || egid != 0)
-        fail("tier_a_test: FAIL uid/gid\n");
-    write_str("tier_a_test: uid/gid OK\n");
+        fail("all_test: FAIL uid/gid\n");
+    write_str("all_test: uid/gid OK\n");
 
     long old_umask = syscall3(SYS_UMASK, 0, 0, 0);
     if (syscall3(SYS_UMASK, old_umask, 0, 0) != 0)
-        fail("tier_a_test: FAIL umask restore-orig\n");
+        fail("all_test: FAIL umask restore-orig\n");
     if (syscall3(SYS_UMASK, 0077, 0, 0) != old_umask)
-        fail("tier_a_test: FAIL umask\n");
+        fail("all_test: FAIL umask\n");
     if (syscall3(SYS_UMASK, old_umask, 0, 0) != 0077)
-        fail("tier_a_test: FAIL umask restore\n");
-    write_str("tier_a_test: umask OK\n");
+        fail("all_test: FAIL umask restore\n");
+    write_str("all_test: umask OK\n");
 
     struct utsname un;
     if (syscall3(SYS_UNAME, (long)&un, 0, 0) != 0)
-        fail("tier_a_test: FAIL uname\n");
+        fail("all_test: FAIL uname\n");
     if (un.sysname[0] != 't')
-        fail("tier_a_test: FAIL uname sysname\n");
+        fail("all_test: FAIL uname sysname\n");
     if (un.machine[0] != 'x')
-        fail("tier_a_test: FAIL uname machine\n");
-    write_str("tier_a_test: uname OK\n");
+        fail("all_test: FAIL uname machine\n");
+    write_str("all_test: uname OK\n");
 
     struct timespec ts1, ts2;
     if (syscall3(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&ts1, 0) != 0)
-        fail("tier_a_test: FAIL clock_gettime\n");
+        fail("all_test: FAIL clock_gettime\n");
     long spins = 0;
     do {
         syscall3(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&ts2, 0);
         spins++;
     } while (ts2.tv_sec == ts1.tv_sec && ts2.tv_nsec == ts1.tv_nsec && spins < 100000);
     if (ts2.tv_sec < ts1.tv_sec || (ts2.tv_sec == ts1.tv_sec && ts2.tv_nsec <= ts1.tv_nsec))
-        fail("tier_a_test: FAIL clock monotonic\n");
-    write_str("tier_a_test: clock_gettime OK\n");
+        fail("all_test: FAIL clock monotonic\n");
+    write_str("all_test: clock_gettime OK\n");
 
     long p = syscall6(SYS_MMAP, 0, 0x4000, PROT_READ | PROT_WRITE,
                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p <= 0 || (p & 0xFFF) != 0)
-        fail("tier_a_test: FAIL mmap\n");
+        fail("all_test: FAIL mmap\n");
     *(volatile long *)p = 0x1234;
     if (*(volatile long *)p != 0x1234)
-        fail("tier_a_test: FAIL mmap write/read\n");
+        fail("all_test: FAIL mmap write/read\n");
     if (*(volatile long *)(p + 0x3000) != 0)
-        fail("tier_a_test: FAIL mmap zero\n");
-    write_str("tier_a_test: mmap OK\n");
+        fail("all_test: FAIL mmap zero\n");
+    write_str("all_test: mmap OK\n");
 
     if (syscall6(SYS_MPROTECT, p, 0x4000, PROT_READ, 0, 0, 0) != 0)
-        fail("tier_a_test: FAIL mprotect\n");
-    write_str("tier_a_test: mprotect OK\n");
+        fail("all_test: FAIL mprotect\n");
+    write_str("all_test: mprotect OK\n");
 
     if (syscall6(SYS_MUNMAP, p, 0x4000, 0, 0, 0, 0) != 0)
-        fail("tier_a_test: FAIL munmap\n");
+        fail("all_test: FAIL munmap\n");
     long p2 = syscall6(SYS_MMAP, 0, 0x1000, PROT_READ | PROT_WRITE,
                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p2 <= 0)
-        fail("tier_a_test: FAIL mmap after munmap\n");
-    write_str("tier_a_test: munmap OK\n");
+        fail("all_test: FAIL mmap after munmap\n");
+    write_str("all_test: munmap OK\n");
 
-    write_str("tier_a_test: ALL OK\n");
+    write_str("all_test: ALL OK\n");
     syscall6(SYS_EXIT_GROUP, 0, 0, 0, 0, 0, 0);
     for (;;);
 }
