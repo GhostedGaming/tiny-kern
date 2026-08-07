@@ -21,6 +21,8 @@
 
 uint64_t apic_count = 0x100000;
 
+volatile uint64_t system_ticks = 0;
+
 static inline uint64_t read_msr(uint32_t msr) {
     uint32_t low, high;
     asm volatile ("rdmsr" : "=a"(low), "=d"(high) : "c"(msr));
@@ -123,6 +125,7 @@ uint8_t apic_init() {
 }
 
 void timer_handler() {
+    system_ticks++;
     apic_eoi();
     schedule();
 }

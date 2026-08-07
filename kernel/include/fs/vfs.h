@@ -82,6 +82,69 @@ typedef long off_t;
 #define VFS_STDOUT      STDOUT_FILENO
 #define VFS_STDERR      STDERR_FILENO
 
+struct timespec {
+    int64_t tv_sec;
+    int64_t tv_nsec;
+};
+
+/* Linux x86_64 userspace-visible struct stat (musl ABI, 144 bytes). */
+struct stat {
+    uint64_t st_dev;
+    uint64_t st_ino;
+    uint64_t st_nlink;
+    uint32_t st_mode;
+    uint32_t st_uid;
+    uint32_t st_gid;
+    int32_t  __pad0;
+    uint64_t st_rdev;
+    int64_t  st_size;
+    int64_t  st_blksize;
+    int64_t  st_blocks;
+    struct timespec st_atim;
+    struct timespec st_mtim;
+    struct timespec st_ctim;
+    int64_t  __unused[3];
+};
+
+/* Linux getdents64 entry layout. */
+struct linux_dirent64 {
+    uint64_t d_ino;
+    int64_t  d_off;
+    uint16_t d_reclen;
+    uint8_t  d_type;
+    char     d_name[];
+};
+
+struct utsname {
+    char sysname[65];
+    char nodename[65];
+    char release[65];
+    char version[65];
+    char machine[65];
+    char domainname[65];
+};
+
+struct iovec {
+    void *iov_base;
+    size_t iov_len;
+};
+
+#define AT_FDCWD -100
+#define AT_SYMLINK_NOFOLLOW 0x100
+
+#define PROT_READ  0x1
+#define PROT_WRITE 0x2
+#define PROT_EXEC  0x4
+#define PROT_NONE  0x0
+
+#define MAP_SHARED    0x01
+#define MAP_PRIVATE   0x02
+#define MAP_FIXED     0x10
+#define MAP_ANONYMOUS 0x20
+
+#define CLOCK_REALTIME  0
+#define CLOCK_MONOTONIC 1
+
 extern int errno;
 
 typedef enum { fat12, fat16, fat32, exfat } fs_t;
@@ -198,15 +261,23 @@ ssize_t write(int fd, const void *buf, size_t count);
 off_t lseek(int fd, off_t offset, int whence);
 int dup(int fd);
 int dup2(int old_fd, int new_fd);
+ssize_t readv(int fd, const struct iovec *iov, int iovcnt);
+ssize_t writev(int fd, const struct iovec *iov, int iovcnt);
+ssize_t getdents64(int fd, void *buf, size_t count);
 
 void vfs_fd_table_init(vfs_file_t **table, size_t count);
 void vfs_fd_table_setup_stdio(vfs_file_t **table, size_t count);
 void vfs_fd_table_clone(vfs_file_t **dst, vfs_file_t **src, size_t count);
 void vfs_fd_table_close(vfs_file_t **table, size_t count);
 
-int stat(const char *path, vfs_stat_t *st);
-int fstat(int fd, vfs_stat_t *st);
-int lstat(const char *path, vfs_stat_t *st);
+int vfs_stat(const char *path, vfs_stat_t *st);
+int vfs_fstat(int fd, vfs_stat_t *st);
+int vfs_lstat(const char *path, vfs_stat_t *st);
+
+int stat(const char *path, struct stat *st);
+int fstat(int fd, struct stat *st);
+int lstat(const char *path, struct stat *st);
+int fstatat(int dirfd, const char *path, struct stat *st, int flags);
 int mkdir(const char *path, uint32_t mode);
 int rmdir(const char *path);
 int unlink(const char *path);
@@ -238,7 +309,7 @@ vfs_node_t *vfs_node_find_child_pub(vfs_node_t *parent, const char *name);
 
 static inline int32_t vfs_filesize(int fd) {
     vfs_stat_t st;
-    if (fstat(fd, &st) != 0) return -1;
+    if (vfs_fstat(fd, &st) != 0) return -1;
     return (int32_t)st.st_size;
 }
 static inline int32_t vfs_seek(int fd, int32_t offset, int whence) { return (int32_t)lseek(fd, offset, whence); }

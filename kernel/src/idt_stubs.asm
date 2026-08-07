@@ -217,6 +217,8 @@ int128_handler:
     push r13
     push r14
     push r15
+    mov r8, [rsp + 40]      ; arg4 = user r10
+    mov r9, [rsp + 56]      ; arg5 = user r8
     mov rax, rsp
     push rax
     call syscall_handler

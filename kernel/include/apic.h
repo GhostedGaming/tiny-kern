@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+extern volatile uint64_t system_ticks;
+
 uint32_t apic_read(uint32_t reg);
 void apic_write(uint32_t reg, uint32_t value);
 void apic_eoi();

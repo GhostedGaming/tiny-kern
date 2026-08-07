@@ -1,16 +1,12 @@
-#define SYS_EXIT 0
+#define SYS_READ 0
 #define SYS_WRITE 1
-#define SYS_FORK 2
-#define SYS_READ 3
-#define SYS_OPEN 4
-#define SYS_CLOSE 5
-#define SYS_LSEEK 6
-#define SYS_DUP 7
-#define SYS_DUP2 8
-#define SYS_BRK 9
-#define SYS_GETPID 10
-#define SYS_EXECVE 11
-#define SYS_MOUNT 12
+#define SYS_OPEN 2
+#define SYS_CLOSE 3
+#define SYS_GETPID 39
+#define SYS_FORK 57
+#define SYS_EXECVE 59
+#define SYS_EXIT 60
+#define SYS_MOUNT 165
 
 static inline long syscall3(long num, long a1, long a2, long a3) {
     long ret;
@@ -54,6 +50,16 @@ void _start() {
         char *argv[] = { "syscall_test", 0 };
         char *envp[] = { 0 };
         syscall3(SYS_EXECVE, (long)"/ram/bins/syscall_test", (long)argv, (long)envp);
+        for (;;) {
+            asm volatile ("pause");
+        }
+    }
+
+    long pid4 = syscall3(SYS_FORK, 0, 0, 0);
+    if (pid4 == 0) {
+        char *argv[] = { "tier_a_test", 0 };
+        char *envp[] = { 0 };
+        syscall3(SYS_EXECVE, (long)"/ram/bins/tier_a_test", (long)argv, (long)envp);
         for (;;) {
             asm volatile ("pause");
         }

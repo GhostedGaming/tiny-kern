@@ -1,6 +1,6 @@
-#define SYS_EXIT 0
 #define SYS_WRITE 1
-#define SYS_GETPID 10
+#define SYS_GETPID 39
+#define SYS_EXIT 60
 
 static inline long syscall3(long num, long a1, long a2, long a3) {
     long ret;

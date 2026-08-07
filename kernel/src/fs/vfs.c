@@ -779,7 +779,7 @@ off_t lseek(int fd, off_t offset, int whence) {
     return new_offset;
 }
 
-int stat(const char *path, vfs_stat_t *st) {
+int vfs_stat(const char *path, vfs_stat_t *st) {
     if (!st) { errno = EINVAL; return -1; }
     vfs_node_t *node = vfs_resolve_path(path);
     if (!node) return -1;
@@ -787,7 +787,7 @@ int stat(const char *path, vfs_stat_t *st) {
     return 0;
 }
 
-int lstat(const char *path, vfs_stat_t *st) {
+int vfs_lstat(const char *path, vfs_stat_t *st) {
     if (!st || !path) { errno = EINVAL; return -1; }
 
     char buf[PATH_MAX];
@@ -821,13 +821,63 @@ int lstat(const char *path, vfs_stat_t *st) {
     return 0;
 }
 
-int fstat(int fd, vfs_stat_t *st) {
+int vfs_fstat(int fd, vfs_stat_t *st) {
     vfs_file_t *file = fd_get(fd);
     if (!file || !st) { errno = EBADF; return -1; }
     vfs_node_t *node = file->node;
     if (!node) { errno = EBADF; return -1; }
     node_to_stat(node, st);
     return 0;
+}
+
+static void stat_to_linux(const vfs_stat_t *in, struct stat *out) {
+    out->st_dev = 0;
+    out->st_ino = in->st_ino;
+    out->st_nlink = in->st_nlink;
+    out->st_mode = in->st_mode;
+    out->st_uid = in->st_uid;
+    out->st_gid = in->st_gid;
+    out->__pad0 = 0;
+    out->st_rdev = 0;
+    out->st_size = (int64_t)in->st_size;
+    out->st_blksize = in->st_blksize;
+    out->st_blocks = in->st_blocks;
+    out->st_atim.tv_sec = in->st_atime;
+    out->st_atim.tv_nsec = 0;
+    out->st_mtim.tv_sec = in->st_mtime;
+    out->st_mtim.tv_nsec = 0;
+    out->st_ctim.tv_sec = in->st_ctime;
+    out->st_ctim.tv_nsec = 0;
+    out->__unused[0] = 0;
+    out->__unused[1] = 0;
+    out->__unused[2] = 0;
+}
+
+int stat(const char *path, struct stat *st) {
+    vfs_stat_t in;
+    if (vfs_stat(path, &in) != 0) return -1;
+    stat_to_linux(&in, st);
+    return 0;
+}
+
+int lstat(const char *path, struct stat *st) {
+    vfs_stat_t in;
+    if (vfs_lstat(path, &in) != 0) return -1;
+    stat_to_linux(&in, st);
+    return 0;
+}
+
+int fstat(int fd, struct stat *st) {
+    vfs_stat_t in;
+    if (vfs_fstat(fd, &in) != 0) return -1;
+    stat_to_linux(&in, st);
+    return 0;
+}
+
+int fstatat(int dirfd, const char *path, struct stat *st, int flags) {
+    (void)dirfd;
+    (void)flags;
+    return stat(path, st);
 }
 
 int mkdir(const char *path, uint32_t mode) {
@@ -1083,11 +1133,87 @@ vfs_dirent_t *readdir(vfs_dir_t *dir) {
     return NULL;
 }
 
+ssize_t readv(int fd, const struct iovec *iov, int iovcnt) {
+    if (!iov || iovcnt < 0) { errno = EINVAL; return -1; }
+    if (iovcnt > 1024) { errno = EINVAL; return -1; }
+    ssize_t total = 0;
+    for (int i = 0; i < iovcnt; i++) {
+        ssize_t n = read(fd, iov[i].iov_base, iov[i].iov_len);
+        if (n < 0) return total ? total : -1;
+        total += n;
+        if ((size_t)n < iov[i].iov_len) break;
+    }
+    return total;
+}
+
+ssize_t writev(int fd, const struct iovec *iov, int iovcnt) {
+    if (!iov || iovcnt < 0) { errno = EINVAL; return -1; }
+    if (iovcnt > 1024) { errno = EINVAL; return -1; }
+    ssize_t total = 0;
+    for (int i = 0; i < iovcnt; i++) {
+        ssize_t n = write(fd, iov[i].iov_base, iov[i].iov_len);
+        if (n < 0) return total ? total : -1;
+        total += n;
+    }
+    return total;
+}
+
+static uint8_t dirent_type_to_dt(uint32_t type) {
+    switch (type) {
+        case VFS_NODE_DIR:      return 4;
+        case VFS_NODE_SYMLINK:  return 10;
+        case VFS_NODE_DEV:      return 6;
+        default:                return 8;
+    }
+}
+
+ssize_t getdents64(int fd, void *buf, size_t count) {
+    vfs_file_t *file = fd_get(fd);
+    if (!file || !file->node) { errno = EBADF; return -1; }
+
+    vfs_node_t *node = file->node;
+    if (node->type == VFS_NODE_MOUNTPOINT) {
+        vfs_node_t *inner = (vfs_node_t *)node->priv;
+        if (inner) node = inner;
+    }
+    if (!node || node->type != VFS_NODE_DIR) { errno = ENOTDIR; return -1; }
+
+    vfs_dir_t dir;
+    dir.node = node;
+    dir.pos = (long)file->offset;
+
+    char *out = buf;
+    size_t written = 0;
+
+    for (;;) {
+        vfs_dirent_t *ent = readdir(&dir);
+        if (!ent) break;
+
+        size_t namelen = strlen(ent->d_name);
+        size_t reclen = offsetof(struct linux_dirent64, d_name) + namelen + 1;
+        reclen = (reclen + 7) & ~(size_t)7;
+
+        if (written + reclen > count) break;
+
+        struct linux_dirent64 *de = (struct linux_dirent64 *)(out + written);
+        de->d_ino = ent->d_ino;
+        de->d_off = dir.pos;
+        de->d_reclen = (uint16_t)reclen;
+        de->d_type = dirent_type_to_dt(ent->d_type);
+        memcpy(de->d_name, ent->d_name, namelen);
+        de->d_name[namelen] = '\0';
+
+        written += reclen;
+    }
+
+    file->offset = dir.pos;
+    return written ? (ssize_t)written : 0;
+}
+
 int closedir(vfs_dir_t *dir) {
     if (!dir) { errno = EBADF; return -1; }
     dir->node->ref_count--;
-    kfree(dir);
-    return 0;
+    kfree(dir);    return 0;
 }
 
 void rewinddir(vfs_dir_t *dir) {

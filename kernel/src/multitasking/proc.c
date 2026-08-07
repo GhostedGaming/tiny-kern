@@ -11,6 +11,7 @@
 
 #define USER_HEAP_START 0x0000600000000000UL
 #define USER_STACK_TOP 0x0000700000000000UL
+#define USER_MMAP_START 0x0000620000000000UL
 #define USTACK_SIZE 0x10000
 
 struct pcb *proc_list = NULL;
@@ -30,6 +31,9 @@ struct pcb *proc_create(void *entry) {
     p->heap_end = USER_HEAP_START;
     p->exit_code = 0;
     p->stopped = 0;
+    p->umask = 0022;
+    p->mmaps = NULL;
+    p->mmap_cursor = USER_MMAP_START;
     memset(&p->sigstate, 0, sizeof(p->sigstate));
 
     vfs_fd_table_init(p->fd_table, MAX_FDS);

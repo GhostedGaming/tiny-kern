@@ -14,6 +14,7 @@ typedef int pid_t;
 
 #define USER_HEAP_START 0x0000600000000000UL
 #define USER_STACK_TOP 0x0000700000000000UL
+#define USER_MMAP_START 0x0000620000000000UL
 #define USTACK_SIZE 0x10000
 
 #define AT_NULL   0
@@ -243,6 +244,18 @@ pid_t fork() {
     cp->heap_end = p->heap_end;
     cp->exit_code = 0;
     cp->stopped = p->stopped;
+    cp->umask = p->umask;
+    cp->mmap_cursor = p->mmap_cursor;
+    cp->mmaps = NULL;
+    for (struct mmap_region *r = p->mmaps; r; r = r->next) {
+        struct mmap_region *nr = (struct mmap_region *)kmalloc(sizeof(struct mmap_region));
+        if (!nr) break;
+        nr->base = r->base;
+        nr->len = r->len;
+        nr->prot = r->prot;
+        nr->next = cp->mmaps;
+        cp->mmaps = nr;
+    }
     cp->sigstate = p->sigstate;
     cp->sigstate.pending = 0;
     cp->next = NULL;
@@ -340,6 +353,8 @@ int execve(const char *path, char *const argv[], char *const envp[]) {
     p->addr_space = new_pml4;
     p->heap_begin = USER_HEAP_START;
     p->heap_end = USER_HEAP_START;
+    p->mmaps = NULL;
+    p->mmap_cursor = USER_MMAP_START;
     p->stopped = 0;
     for (int i = 1; i < NSIG; i++) {
         if (p->sigstate.actions[i].sa_handler != SIG_IGN) {

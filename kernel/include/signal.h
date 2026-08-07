@@ -96,13 +96,12 @@ typedef struct sigframe {
 
 typedef void (*sig_handler_t)(int);
 
-#define SYS_SIGACTION  13
-#define SYS_SIGPROCMASK 14
-#define SYS_SIGPENDING 15
-#define SYS_SIGSUSPEND 16
-#define SYS_SIGRETURN  17
-#define SYS_KILL       18
-#define SYS_RAISE      19
+#define SYS_RT_SIGACTION  13
+#define SYS_RT_SIGPROCMASK 14
+#define SYS_RT_SIGRETURN  15
+#define SYS_KILL          62
+#define SYS_RT_SIGPENDING 127
+#define SYS_RT_SIGSUSPEND 130
 
 struct pcb;
 

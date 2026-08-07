@@ -146,7 +146,7 @@ static void sig_queue(struct pcb *p, int sig) {
 
 static void put_sigreturn_tramp(uint8_t *dst) {
     dst[0] = 0xBF;
-    dst[1] = SYS_SIGRETURN;
+    dst[1] = SYS_RT_SIGRETURN;
     dst[2] = 0;
     dst[3] = 0;
     dst[4] = 0;

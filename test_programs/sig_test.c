@@ -1,13 +1,10 @@
-#define SYS_EXIT 0
 #define SYS_WRITE 1
-#define SYS_GETPID 10
-#define SYS_SIGACTION 13
-#define SYS_SIGPROCMASK 14
-#define SYS_SIGPENDING 15
-#define SYS_SIGSUSPEND 16
-#define SYS_SIGRETURN 17
-#define SYS_KILL 18
-#define SYS_RAISE 19
+#define SYS_GETPID 39
+#define SYS_RT_SIGACTION 13
+#define SYS_RT_SIGPROCMASK 14
+#define SYS_RT_SIGPENDING 127
+#define SYS_KILL 62
+#define SYS_EXIT 60
 
 #define SIGSEGV 11
 #define SIGUSR1 23
@@ -66,40 +63,40 @@ void _start() {
     act.sa_handler = (void *)handler;
     act.sa_mask = 0;
     act.sa_flags = 0;
-    if (syscall3(SYS_SIGACTION, SIGUSR1, (long)&act, (long)&old) != 0)
+    if (syscall3(SYS_RT_SIGACTION, SIGUSR1, (long)&act, (long)&old) != 0)
         fail("sig_test: FAIL sigaction\n");
 
-    if (syscall3(SYS_RAISE, SIGUSR1, 0, 0) != 0)
+    long pid = syscall3(SYS_GETPID, 0, 0, 0);
+    if (syscall3(SYS_KILL, pid, SIGUSR1, 0) != 0)
         fail("sig_test: FAIL raise\n");
     if (got_usr1 != 1)
         fail("sig_test: FAIL handler did not run\n");
     write_str("sig_test: raise handler OK\n");
 
     act.sa_handler = (void *)1;
-    if (syscall3(SYS_SIGACTION, SIGUSR2, (long)&act, (long)&old) != 0)
+    if (syscall3(SYS_RT_SIGACTION, SIGUSR2, (long)&act, (long)&old) != 0)
         fail("sig_test: FAIL sigaction ignore\n");
-    if (syscall3(SYS_RAISE, SIGUSR2, 0, 0) != 0)
+    if (syscall3(SYS_KILL, pid, SIGUSR2, 0) != 0)
         fail("sig_test: FAIL raise ignored\n");
     write_str("sig_test: ignore OK\n");
 
     mask = 1UL << (SIGUSR1 - 1);
-    if (syscall3(SYS_SIGPROCMASK, SIG_BLOCK, (long)&mask, 0) != 0)
+    if (syscall3(SYS_RT_SIGPROCMASK, SIG_BLOCK, (long)&mask, 0) != 0)
         fail("sig_test: FAIL sigprocmask block\n");
-    syscall3(SYS_RAISE, SIGUSR1, 0, 0);
+    syscall3(SYS_KILL, pid, SIGUSR1, 0);
     pend = 0;
-    if (syscall3(SYS_SIGPENDING, (long)&pend, 0, 0) != 0)
+    if (syscall3(SYS_RT_SIGPENDING, (long)&pend, 0, 0) != 0)
         fail("sig_test: FAIL sigpending\n");
     if (!(pend & (1UL << (SIGUSR1 - 1))))
         fail("sig_test: FAIL not pending\n");
     write_str("sig_test: blocked + pending OK\n");
 
-    if (syscall3(SYS_SIGPROCMASK, SIG_UNBLOCK, (long)&mask, 0) != 0)
+    if (syscall3(SYS_RT_SIGPROCMASK, SIG_UNBLOCK, (long)&mask, 0) != 0)
         fail("sig_test: FAIL sigprocmask unblock\n");
     if (got_usr1 != 2)
         fail("sig_test: FAIL unblock did not deliver\n");
     write_str("sig_test: unblock delivered OK\n");
 
-    long pid = syscall3(SYS_GETPID, 0, 0, 0);
     if (syscall3(SYS_KILL, pid, SIGUSR1, 0) != 0)
         fail("sig_test: FAIL kill\n");
     if (got_usr1 != 3)
