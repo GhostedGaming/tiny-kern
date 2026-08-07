@@ -3,12 +3,14 @@
 extern exception_handler
 extern timer_handler
 extern ahci_handler
+extern keyboard_handler
 extern syscall_handler
 extern current_tcb
 
 global ahci_stub
 global isr_stub_table
 global apic_stub
+global keyboard_stub
 global int128_handler
 global syscall_entry_stub
 
@@ -200,6 +202,38 @@ ahci_stub:
     pop rax
     iretq
 
+keyboard_stub:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    push rsi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    call keyboard_handler
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    iretq
+
 int128_handler:
     push 0
     push rax
@@ -241,28 +275,21 @@ int128_handler:
     add rsp, 8
     iretq
 
-; Linux/musl x86_64 syscall ABI entry (opcode `syscall`).
-; On entry:  RAX = syscall number, args in RDI,RSI,RDX,R10,R8,R9.
-;            RCX = return RIP, R11 = user RFLAGS (both clobbered by the CPU).
-;            RSP = user RSP; no stack switch performed by the CPU.
-; We switch to the current thread's kernel stack (TSS rsp0 == tcb.kstack),
-; build the same user_context_t frame the int $0x80 path produces, call
-; syscall_handler(num, arg1..arg5, ctx), and return via iretq.
 syscall_entry_stub:
     cli
     mov r11, rsp
     mov rsp, [rel current_tcb]
-    mov rsp, [rsp + 16]     ; tcb.kstack (base, same as TSS rsp0)
+    mov rsp, [rsp + 16]
     push USER_SS
-    push r11                ; user RSP
+    push r11
     pushfq
-    or dword [rsp], 0x200   ; ensure IF set on return to user
+    or dword [rsp], 0x200
     push USER_CS
-    push rcx                ; user RIP
-    push 0                  ; error_code
-    push rax                ; syscall number (rax slot)
+    push rcx
+    push 0
+    push rax
     push rbx
-    push 0                  ; rcx slot (dead per syscall ABI)
+    push 0 
     push rdx
     push rsi
     push rdi
@@ -270,7 +297,7 @@ syscall_entry_stub:
     push r8
     push r9
     push r10
-    push 0                  ; r11 slot (dead per syscall ABI)
+    push 0 
     push r12
     push r13
     push r14
@@ -283,7 +310,7 @@ syscall_entry_stub:
     mov r8,  [rsp + 40]     ; arg4 = user r10
     mov r9,  [rsp + 56]     ; arg5 = user r8
     mov rax, rsp
-    push rax                ; ctx as 7th arg
+    push rax
     call syscall_handler
     add rsp, 8
     pop r15

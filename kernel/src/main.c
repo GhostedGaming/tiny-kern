@@ -22,6 +22,7 @@
 #include <multitasking/proc.h>
 #include <multitasking/sched.h>
 #include <binary_loaders/elf.h>
+#include <input/input.h>
 #include <tty.h>
 
 extern void putchar(tty_t *tty, char c);
@@ -155,8 +156,10 @@ void kmain() {
 	apic_init();
 	ahci_init();
 	drive_map_init();
-    vfs_init();    devfs_init();
+    vfs_init();    
+    devfs_init();
     tty_init(putchar);
+    input_init();
 
     enable_sse();
 

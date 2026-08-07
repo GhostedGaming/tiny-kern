@@ -7,6 +7,8 @@
 #include <fs/devfs.h>
 #include <tty.h>
 #include <logging/print.h>
+#include <multitasking/sched.h>
+#include <multitasking/thread.h>
 
 #define GLYPH_W 8
 #define GLYPH_H 8
@@ -214,6 +216,13 @@ static int ring_pop(tty_ring_t *r, uint8_t *out) {
     return 1;
 }
 
+static void tty_wake(tty_t *tty) {
+    if (tty->waiter) {
+        unblock(tty->waiter);
+        tty->waiter = NULL;
+    }
+}
+
 static void tty_putchar_raw(tty_t *tty, char c) {
     if ((tty->termios.c_oflag & OPOST) && (tty->termios.c_oflag & ONLCR) && c == '\n')
         tty->putchar(tty, '\r');
@@ -247,11 +256,13 @@ void tty_input(tty_t *tty, char c) {
             uint8_t byte;
             while (ring_pop(&tty->raw, &byte))
                 ring_push(&tty->cooked, byte);
+            tty_wake(tty);
         }
     } else {
         if (tty->termios.c_lflag & ECHO)
             tty_putchar_raw(tty, c);
         ring_push(&tty->cooked, (uint8_t)c);
+        tty_wake(tty);
     }
 }
 
@@ -264,6 +275,19 @@ int32_t tty_write(tty_t *tty, const uint8_t *buf, uint32_t count) {
 
 int32_t tty_read(tty_t *tty, uint8_t *buf, uint32_t count) {
     if (!tty || !buf || count == 0) return -1;
+
+    while (tty->cooked.count == 0) {
+        if (!current_tcb)
+            return 0;
+        asm volatile ("cli");
+        if (tty->cooked.count > 0) {
+            asm volatile ("sti");
+            break;
+        }
+        tty->waiter = current_tcb;
+        block_current();
+    }
+
     uint32_t n = 0;
     while (n < count) {
         uint8_t c;

@@ -41,6 +41,8 @@ typedef struct {
 
 typedef struct tty tty_t;
 
+struct tcb;
+
 struct tty {
     uint8_t    index;
     termios_t  termios;
@@ -49,6 +51,7 @@ struct tty {
     void (*putchar)(tty_t *tty, char c);
     void (*push_char)(tty_t *tty, char c);
     uint8_t    active;
+    struct tcb *waiter;
 
     uint32_t   col;
     uint32_t   row;

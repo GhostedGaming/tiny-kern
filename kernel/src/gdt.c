@@ -92,7 +92,7 @@ void tss_set_kernel_stack(uintptr_t rsp0) {
     global_tss.rsp0 = rsp0;
 }
 
-extern void syscall_entry_stub(void);
+extern void syscall_entry_stub();
 
 static inline uint64_t rdmsr(uint32_t msr) {
     uint32_t lo, hi;
@@ -107,8 +107,8 @@ static inline void wrmsr(uint32_t msr, uint64_t value) {
 
 void syscall_setup() {
     uint64_t efer = rdmsr(0xC0000080);
-    wrmsr(0xC0000080, efer | 1);                            // EFER.SCE
-    wrmsr(0xC0000081, 0x0008000800000000ULL);               // STAR: SYSCALL CS=0x08, SS=0x08(+8=0x10)
-    wrmsr(0xC0000082, (uint64_t)&syscall_entry_stub);       // LSTAR
-    wrmsr(0xC0000084, 0);                                   // SFMASK: mask nothing
+    wrmsr(0xC0000080, efer | 1);
+    wrmsr(0xC0000081, 0x0008000800000000ULL);
+    wrmsr(0xC0000082, (uint64_t)&syscall_entry_stub);
+    wrmsr(0xC0000084, 0);
 }

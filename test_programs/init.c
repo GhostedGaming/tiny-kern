@@ -65,5 +65,15 @@ void _start() {
         }
     }
 
+    long pid5 = syscall3(SYS_FORK, 0, 0, 0);
+    if (pid5 == 0) {
+        char *argv[] = { "input_test", 0 };
+        char *envp[] = { 0 };
+        syscall3(SYS_EXECVE, (long)"/ram/bins/input_test", (long)argv, (long)envp);
+        for (;;) {
+            asm volatile ("pause");
+        }
+    }
+
     syscall3(SYS_EXIT, 0, 0, 0);
 }

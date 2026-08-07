@@ -107,8 +107,8 @@ static ssize_t zero_write(devfs_dev_t *dev, const void *buf, size_t count) {
 }
 
 static ssize_t console_read(devfs_dev_t *dev, void *buf, size_t count) {
-    (void)dev; (void)buf; (void)count;
-    return 0;
+    (void)dev;
+    return (ssize_t)tty_read(tty_get_active(), (uint8_t *)buf, (uint32_t)count);
 }
 
 static ssize_t console_write(devfs_dev_t *dev, const void *buf, size_t count) {
