@@ -1,8 +1,11 @@
 [BITS 64]
 
-global switch_task
 extern current_tcb
 extern tss_set_kernel_stack
+
+global switch_task
+global fork_child_restore
+global exec_switch_resume
 
 struc tcb
     .tid:         resq 1
@@ -13,6 +16,7 @@ struc tcb
     .next:        resq 1
     .proc_next:   resq 1
     .parent:      resq 1
+    .fpu_area:    resq 1
     .state:       resb 1
 endstruc
 
@@ -38,6 +42,9 @@ switch_task:
     test rax, rax
     jz .first_switch
 
+    mov rsi, [rax + tcb.fpu_area]
+    fxsave [rsi]
+
     mov [rax + tcb.ksp], rsp
 
 .first_switch:
@@ -52,6 +59,9 @@ switch_task:
 
     mov rsp, [rdi + tcb.ksp]
 
+    mov rsi, [rdi + tcb.fpu_area]
+    fxrstor [rsi]
+
     mov rax, [rdi + tcb.addr_space]
     mov rcx, cr3
 
@@ -61,6 +71,43 @@ switch_task:
     mov cr3, rax
 
 .same_cr3:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    popfq
+    ret
+
+fork_child_restore:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rbx
+    xor eax, eax
+    iretq
+
+exec_switch_resume:
+    mov rsp, rdi
     pop r15
     pop r14
     pop r13

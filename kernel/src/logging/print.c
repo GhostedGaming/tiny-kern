@@ -21,9 +21,25 @@ static void print_string(const char *s) {
     }
 }
 
-void print_impl(const char *caller, const char *fmt, ...) {
+static void print_uint(uint64_t n) {
+    char buf[20];
+    int i = 0;
+    do {
+        buf[i++] = '0' + (char)(n % 10);
+        n /= 10;
+    } while (n);
+    while (i > 0) {
+        putchar(buf[--i]);
+    }
+}
+
+void print_impl(const char *file, const char *caller, int line, const char *fmt, ...) {
     uint64_t flags = spinlock_acquire_irqsave(&print_lock);
 
+    print_string(file);
+    putchar(':');
+    print_uint(line);
+    print_string(": ");
     print_string(caller);
     print_string("(): ");
 

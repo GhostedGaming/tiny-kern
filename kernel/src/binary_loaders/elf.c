@@ -7,7 +7,7 @@
 #include <fs/vfs.h>
 #include <binary_loaders/elf.h>
 
-uint64_t elf64_parse(int fd, uintptr_t cr3) {
+uint64_t elf64_parse(int fd, uintptr_t cr3, struct elf64_load_info *info) {
     int32_t size = vfs_filesize(fd);
     if (size <= 0)
         return 0;
@@ -93,6 +93,23 @@ uint64_t elf64_parse(int fd, uintptr_t cr3) {
     }
 
     uint64_t entry = eh->e_entry;
+
+    if (info) {
+        info->entry = entry;
+        info->phent = eh->e_phentsize;
+        info->phnum = eh->e_phnum;
+        info->phdr = 0;
+        for (int i = 0; i < eh->e_phnum; i++) {
+            if (ph[i].p_type != PT_LOAD)
+                continue;
+            if (eh->e_phoff >= ph[i].p_offset &&
+                eh->e_phoff < ph[i].p_offset + ph[i].p_filesz) {
+                info->phdr = ph[i].p_vaddr + (eh->e_phoff - ph[i].p_offset);
+                break;
+            }
+        }
+    }
+
     kfree(elf);
     return entry;
 }

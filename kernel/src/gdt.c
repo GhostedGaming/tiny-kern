@@ -91,3 +91,24 @@ void gdt_init() {
 void tss_set_kernel_stack(uintptr_t rsp0) {
     global_tss.rsp0 = rsp0;
 }
+
+extern void syscall_entry_stub(void);
+
+static inline uint64_t rdmsr(uint32_t msr) {
+    uint32_t lo, hi;
+    asm volatile ("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+    return ((uint64_t)hi << 32) | lo;
+}
+
+static inline void wrmsr(uint32_t msr, uint64_t value) {
+    asm volatile ("wrmsr" : : "c"(msr), "a"((uint32_t)(value & 0xFFFFFFFF)),
+                  "d"((uint32_t)(value >> 32)) : "memory");
+}
+
+void syscall_setup() {
+    uint64_t efer = rdmsr(0xC0000080);
+    wrmsr(0xC0000080, efer | 1);                            // EFER.SCE
+    wrmsr(0xC0000081, 0x0008000800000000ULL);               // STAR: SYSCALL CS=0x08, SS=0x08(+8=0x10)
+    wrmsr(0xC0000082, (uint64_t)&syscall_entry_stub);       // LSTAR
+    wrmsr(0xC0000084, 0);                                   // SFMASK: mask nothing
+}

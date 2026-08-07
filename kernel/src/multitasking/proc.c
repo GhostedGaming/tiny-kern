@@ -4,6 +4,7 @@
 #include <mm/frame.h>
 #include <mm/vmm.h>
 #include <mm/heap.h>
+#include <mm/memory.h>
 #include <fs/vfs.h>
 #include <multitasking/thread.h>
 #include <multitasking/proc.h>
@@ -28,6 +29,8 @@ struct pcb *proc_create(void *entry) {
     p->heap_begin = USER_HEAP_START;
     p->heap_end = USER_HEAP_START;
     p->exit_code = 0;
+    p->stopped = 0;
+    memset(&p->sigstate, 0, sizeof(p->sigstate));
 
     vfs_fd_table_init(p->fd_table, MAX_FDS);
     vfs_fd_table_setup_stdio(p->fd_table, MAX_FDS);
@@ -59,6 +62,20 @@ struct pcb *proc_create(void *entry) {
     }
 
     return p;
+}
+
+struct pcb *proc_find(uint64_t pid) {
+    if (!proc_list) {
+        return NULL;
+    }
+    struct pcb *p = proc_list;
+    do {
+        if (p->pid == pid) {
+            return p;
+        }
+        p = p->next;
+    } while (p != proc_list);
+    return NULL;
 }
 
 uintptr_t proc_sbrk(struct pcb *p, intptr_t increment) {
@@ -120,6 +137,6 @@ void proc_destroy(struct pcb *p) {
         }
     }
 
-    frame_free(p->addr_space);
+    paging_destroy_address_space(p->addr_space);
     kfree(p);
 }

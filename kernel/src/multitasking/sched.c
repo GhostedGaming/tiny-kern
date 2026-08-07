@@ -68,8 +68,6 @@ void schedule() {
             print("Switching to task %d\n", t->tid);
             switch_task(t);
             return;
-        } else {
-            print("Tid: %d, State: %d\n", t->tid, t->state);
         }
         t = t->next;
     }
@@ -102,6 +100,16 @@ struct tcb *block_current() {
     print("Blocking %d\n", t->tid);
     schedule();
     return t;
+}
+
+void sched_sleep_thread(struct tcb *t) {
+    t->state = Sleeping;
+    print("Sleeping thread: %d\n", t->tid);
+}
+
+void sched_wake_thread(struct tcb *t) {
+    t->state = Ready;
+    print("Waking thread: %d\n", t->tid);
 }
 
 void unblock(struct tcb *t) {

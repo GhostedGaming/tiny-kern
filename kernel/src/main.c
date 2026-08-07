@@ -31,38 +31,62 @@ extern void jump_to_user(uint64_t entry, uint64_t stack);
 
 static uint64_t g_init_entry;
 
+static void enable_sse() {
+    uint64_t cr0, cr4;
+
+    asm volatile ("mov %%cr0, %0" : "=r"(cr0));
+    cr0 &= ~(1ULL << 2);
+    cr0 |= (1ULL << 1);
+    cr0 &= ~(1ULL << 3);
+    asm volatile ("mov %0, %%cr0" : : "r"(cr0) : "memory");
+
+    uint32_t eax, ebx, ecx, edx;
+    asm volatile ("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                            : "a"(1), "c"(0));
+
+    asm volatile ("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= (1ULL << 9);
+    if (ecx & (1u << 26)) {
+        cr4 |= (1ULL << 18);
+    }
+    asm volatile ("mov %0, %%cr4" : : "r"(cr4) : "memory");
+
+    uint32_t mxcsr = 0x1F80;
+    asm volatile ("ldmxcsr %0" : : "m"(mxcsr));
+}
+
 static void init_thread_entry() {
-    jump_to_user(g_init_entry, USER_STACK_TOP);
-    print("init: jump_to_user returned\n");
+    jump_to_user(g_init_entry, USER_STACK_TOP - 8);
+    print("jump_to_user returned\n");
     for (;;) asm volatile ("hlt");
 }
 
 static void run_init() {
     int fd = open("/ram/bins/init", O_RDONLY);
     if (fd < 0) {
-        print("init: open(/ram/bins/init) failed errno=%d\n", errno);
+        print("open(/ram/bins/init) failed errno=%d\n", errno);
         return;
     }
 
     struct pcb *p = proc_create(init_thread_entry);
     if (!p) {
-        print("init: proc_create failed\n");
+        print("proc_create failed\n");
         close(fd);
         return;
     }
 
-    uint64_t entry = elf64_parse(fd, p->addr_space);
+    uint64_t entry = elf64_parse(fd, p->addr_space, NULL);
     close(fd);
     if (!entry) {
-        print("init: elf64_parse failed\n");
+        print("elf64_parse failed\n");
         return;
     }
 
     g_init_entry = entry;
-    print("init: loaded /ram/bins/init entry=0x%lX pid=%lu\n", entry, p->pid);
+    print("loaded /ram/bins/init entry=0x%lX pid=%lu\n", entry, p->pid);
 
     schedule();
-    print("init: scheduler returned\n");
+    print("scheduler returned\n");
 }
 
 __attribute__((used, section(".limine_requests")))
@@ -121,6 +145,7 @@ void kmain() {
 	}
 
 	gdt_init();
+	syscall_setup();
 	hhdm_init(hhdm_request.response->offset);
 	frame_init(memmap_request.response);
 	paging_init(memmap_request.response, executable_request.response);
@@ -130,21 +155,20 @@ void kmain() {
 	apic_init();
 	ahci_init();
 	drive_map_init();
-    vfs_init();
-    devfs_init();
+    vfs_init();    devfs_init();
     tty_init(putchar);
 
-    vfs_mount("drive0", 0);
+    enable_sse();
 
     if (module_request.response != NULL
         && module_request.response->module_count > 0) {
         struct limine_file *mod = module_request.response->modules[0];
         void *img = mod->address;
         uint8_t rc = ustar_mount("/ram", img, mod->size);
-        print("ram: mounted %s -> status %u\n", mod->path, rc);
+        print("mounted %s -> status %u\n", mod->path, rc);
         run_init();
     } else {
-        print("ram: no Limine modules loaded\n");
+        print("no Limine modules loaded\n");
     }
 
 	asm volatile ("sti");

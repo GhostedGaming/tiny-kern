@@ -180,4 +180,11 @@ typedef struct {
 #define PF_W 2
 #define PF_R 4
 
-uint64_t elf64_parse(int fd, uintptr_t cr3);
+struct elf64_load_info {
+    uint64_t entry;
+    uint64_t phdr;
+    uint64_t phent;
+    uint64_t phnum;
+};
+
+uint64_t elf64_parse(int fd, uintptr_t cr3, struct elf64_load_info *info);

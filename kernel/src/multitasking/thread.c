@@ -4,23 +4,66 @@
 #include <mm/page.h>
 #include <mm/hhdm.h>
 #include <mm/heap.h>
+#include <mm/vmm.h>
 #include <logging/print.h>
 #include <multitasking/proc.h>
 #include <multitasking/thread.h>
-
-#define KSTACK_SIZE 0x10000
 
 struct tcb *thread_list = NULL;
 
 uint64_t thread_count = 0;
 
-struct tcb *create_thread(void *entry, struct pcb *p, void *ustack) {
-    struct tcb *t = (struct tcb *)kmalloc(sizeof(struct tcb));
-    uint8_t *kstack = kmalloc(KSTACK_SIZE);
+#define KSTACK_REGION_BASE KERNEL_STACK_REGION
 
-    if (!t || !kstack || !ustack) {
+static uint64_t next_kstack_vaddr = KSTACK_REGION_BASE;
+
+void *alloc_kernel_stack() {
+    void *base = vmm_map_region((uint64_t *)kernel_pml4,
+                                (void *)next_kstack_vaddr,
+                                PAGE_WRITABLE,
+                                KSTACK_SIZE / PAGE_SIZE);
+    if (!base) {
         return NULL;
     }
+
+    next_kstack_vaddr += KSTACK_SIZE;
+    return base;
+}
+
+void free_kernel_stack(void *base) {
+    if (!base) {
+        return;
+    }
+
+    linked_list_node_t *node = vmm_find_region((uint64_t)base);
+    if (node) {
+        vmm_free_region((uint64_t *)kernel_pml4, node);
+    }
+}
+
+struct tcb *create_thread(void *entry, struct pcb *p, void *ustack) {
+    if (!p || !ustack) {
+        return NULL;
+    }
+
+    struct tcb *t = (struct tcb *)kmalloc(sizeof(struct tcb));
+    if (!t) {
+        return NULL;
+    }
+
+    uint8_t *kstack = alloc_kernel_stack();
+    if (!kstack) {
+        kfree(t);
+        return NULL;
+    }
+
+    uint8_t *fpu = (uint8_t *)kmalloc(512);
+    if (!fpu) {
+        free_kernel_stack(kstack);
+        kfree(t);
+        return NULL;
+    }
+    asm volatile ("fxsave %0" : : "m"(*(uint8_t (*)[512])fpu) : "memory");
 
     uintptr_t *sp = (uintptr_t *)(kstack + KSTACK_SIZE);
 
@@ -47,6 +90,7 @@ struct tcb *create_thread(void *entry, struct pcb *p, void *ustack) {
     t->kstack_top = kstack + KSTACK_SIZE;
     t->tsp = ustack;
     t->addr_space = p->addr_space;
+    t->fpu_area = fpu;
     t->parent = p;
     t->state = Ready;
 
@@ -106,6 +150,7 @@ void destroy_thread(struct tcb *t) {
 
     p->t_count--;
 
-    kfree(t->kstack_top - KSTACK_SIZE);
+    kfree(t->fpu_area);
+    free_kernel_stack((void *)(t->kstack_top - KSTACK_SIZE));
     kfree(t);
 }

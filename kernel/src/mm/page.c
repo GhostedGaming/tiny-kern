@@ -40,7 +40,9 @@ extern char __data_start[], __data_end[];
 typedef uint64_t page_entry_t;
 
 static inline uintptr_t get_current_cr3() {
-    
+    uintptr_t cr3 = 0;
+    asm volatile ("mov %%cr3, %0" : "=r"(cr3) :: "memory");
+    return cr3;
 }
 
 static void invalidate_page(void *addr, uint64_t len) {
@@ -97,14 +99,132 @@ uintptr_t paging_create_pml4() {
     return pml4_phys;
 }
 
+static uint8_t clone_address_space_table(uint64_t *src_table, uint64_t *dst_table, uint64_t level) {
+    for (int i = 0; i < 512; i++) {
+        uint64_t entry = src_table[i];
+        if (!(entry & PAGE_PRESENT)) {
+            continue;
+        }
+
+        if (level == 1) {
+            uintptr_t new_frame = frame_alloc();
+            if (!new_frame) {
+                return 1;
+            }
+
+            uintptr_t src_frame = entry & PAGE_ADDR_MASK;
+            memcpy(phys_to_virt(new_frame), phys_to_virt(src_frame), PAGE_SIZE);
+            dst_table[i] = (new_frame & PAGE_ADDR_MASK) | (entry & ~PAGE_ADDR_MASK);
+        } else {
+            if (entry & (1ULL << 7)) {
+                return 1;
+            }
+
+            uintptr_t new_table = frame_alloc();
+            if (!new_table) {
+                return 1;
+            }
+
+            uint64_t *dst_subtable = phys_to_virt(new_table);
+            memset(dst_subtable, 0, PAGE_SIZE);
+            dst_table[i] = (new_table & PAGE_ADDR_MASK) | (entry & ~PAGE_ADDR_MASK);
+
+            uint64_t *src_subtable = phys_to_virt(entry & PAGE_ADDR_MASK);
+            if (clone_address_space_table(src_subtable, dst_subtable, level - 1)) {
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
 uintptr_t fork_address_space() {
-    uintptr_t pml4 = frame_alloc();
-    uintptr_t current_pml4 = 0;
-    if (!pml4) {
+    uintptr_t new_pml4_phys = frame_alloc();
+    if (!new_pml4_phys) {
         return 0;
     }
 
-    current_pml4 = 
+    uint64_t *src_pml4 = phys_to_virt(get_current_cr3());
+    uint64_t *dst_pml4 = phys_to_virt(new_pml4_phys);
+    uint64_t *kernel = phys_to_virt((uintptr_t)kernel_pml4);
+
+    memset(dst_pml4, 0, PAGE_SIZE);
+
+    for (int i = 256; i < 512; i++) {
+        dst_pml4[i] = kernel[i];
+    }
+
+    for (int i = 0; i < 256; i++) {
+        if (!(src_pml4[i] & PAGE_PRESENT)) {
+            continue;
+        }
+
+        if (src_pml4[i] & (1ULL << 7)) {
+            frame_free(new_pml4_phys);
+            return 0;
+        }
+
+        uintptr_t new_table = frame_alloc();
+        if (!new_table) {
+            frame_free(new_pml4_phys);
+            return 0;
+        }
+
+        uint64_t *dst_subtable = phys_to_virt(new_table);
+        memset(dst_subtable, 0, PAGE_SIZE);
+        dst_pml4[i] = (new_table & PAGE_ADDR_MASK) | (src_pml4[i] & ~PAGE_ADDR_MASK);
+
+        uint64_t *src_subtable = phys_to_virt(src_pml4[i] & PAGE_ADDR_MASK);
+        if (clone_address_space_table(src_subtable, dst_subtable, 3)) {
+            frame_free(new_pml4_phys);
+            return 0;
+        }
+    }
+
+    return new_pml4_phys;
+}
+
+static void destroy_table(uint64_t *table, uint64_t level) {
+    for (int i = 0; i < 512; i++) {
+        uint64_t entry = table[i];
+        if (!(entry & PAGE_PRESENT)) {
+            continue;
+        }
+
+        uintptr_t frame = entry & PAGE_ADDR_MASK;
+
+        if (level == 1) {
+            frame_free(frame);
+        } else if (!(entry & (1ULL << 7))) {
+            destroy_table(phys_to_virt(frame), level - 1);
+            frame_free(frame);
+        }
+    }
+}
+
+void paging_destroy_address_space(uintptr_t pml4_phys) {
+    if (!pml4_phys) {
+        return;
+    }
+
+    uint64_t *pml4 = phys_to_virt(pml4_phys);
+
+    for (int i = 0; i < 256; i++) {
+        uint64_t entry = pml4[i];
+        if (!(entry & PAGE_PRESENT)) {
+            continue;
+        }
+
+        uintptr_t frame = entry & PAGE_ADDR_MASK;
+
+        if (!(entry & (1ULL << 7))) {
+            destroy_table(phys_to_virt(frame), 3);
+            frame_free(frame);
+        }
+    }
+
+    frame_free(pml4_phys);
 }
 
 uint8_t paging_map_page(uint64_t *pml4_phys, void *virt_addr, uintptr_t phys_addr, uint64_t flags) {
@@ -226,6 +346,29 @@ static uint8_t map_framebuffer(uint64_t *pml4) {
 }
 
 
+uint8_t paging_prepare_kernel_stack_region() {
+    if (!kernel_pml4) {
+        return 1;
+    }
+
+    uint64_t *pml4 = phys_to_virt((uintptr_t)kernel_pml4);
+    uint64_t idx = get_pml(4, (void *)KERNEL_STACK_REGION);
+
+    if (pml4[idx] & PAGE_PRESENT) {
+        return 0;
+    }
+
+    uintptr_t table = frame_alloc();
+    if (!table) {
+        return 1;
+    }
+
+    memset(phys_to_virt(table), 0, PAGE_SIZE);
+    pml4[idx] = table | PAGE_PRESENT | PAGE_WRITABLE;
+
+    return 0;
+}
+
 uint8_t paging_init(struct limine_memmap_response *memmap, struct limine_executable_address_response *exec) {
     uintptr_t pml4 = frame_alloc();
 
@@ -289,6 +432,10 @@ uint8_t paging_init(struct limine_memmap_response *memmap, struct limine_executa
     reload_cr3((uint64_t)pml4);
 
     kernel_pml4 = (uint64_t *)pml4;
- 
+
+    if (paging_prepare_kernel_stack_region()) {
+        return 1;
+    }
+
     return 0;
 }

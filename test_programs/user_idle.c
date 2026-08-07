@@ -8,6 +8,7 @@ static inline long syscall3(long num, long a1, long a2, long a3) {
 }
 
 void _start() {
+    syscall3(1, 1, (long)"User idle thread", 16);
     for (;;) {
         asm volatile ("pause");
     }

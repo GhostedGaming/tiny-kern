@@ -5,6 +5,9 @@
 #include <apic.h>
 #include <mm/page.h>
 #include <idt.h>
+#include <signal.h>
+#include <multitasking/sched.h>
+#include <multitasking/proc.h>
 
 #define IDT_MAX_DESCRIPTORS 256
 
@@ -81,8 +84,54 @@ void idt_init() {
     print("IDT loaded");
 }
 
-void exception_handler(uint64_t vector, uint64_t error_code, uint64_t rip) {
+void exception_handler(uint64_t vector, uint64_t error_code, user_context_t *ctx) {
+    if (ctx && (ctx->cs & 3) == 3) {
+        int sig = 0;
+        switch (vector) {
+            case 0:
+            case 16:
+            case 19:
+                sig = SIGFPE;
+                break;
+            case 3:
+                sig = SIGTRAP;
+                break;
+            case 6:
+                sig = SIGILL;
+                break;
+            case 17:
+                sig = SIGBUS;
+                break;
+            case 4:
+            case 5:
+            case 8:
+            case 10:
+            case 11:
+            case 12:
+            case 13:
+            case 14:
+                sig = SIGSEGV;
+                break;
+            default:
+                break;
+        }
+        if (sig) {
+            struct pcb *p = sched_current_proc();
+            if (p) {
+                sigset_t bit = (sigset_t)1 << (sig - 1);
+                if (p->sigstate.blocked & bit) {
+                    p->sigstate.pending |= bit;
+                } else {
+                    sig_deliver(p, sig, ctx);
+                }
+            }
+        }
+        sig_deliver_current(ctx);
+        return;
+    }
+
     uint64_t cr2, cr3, cr4, rflags, cs, ss;
+    uint64_t rip = ctx ? ctx->rip : 0;
 
     __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
     __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
@@ -111,4 +160,7 @@ void exception_handler(uint64_t vector, uint64_t error_code, uint64_t rip) {
     print("----------------------------------------------------------------\n");
     print("System halted.\n");
     print("================================================================\n");
+    for (;;) {
+        asm volatile ("hlt");
+    }
 }
