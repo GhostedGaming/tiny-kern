@@ -5,12 +5,18 @@
 #include <multitasking/proc.h>
 #include <multitasking/thread.h>
 #include <mm/page.h>
+#include <mm/hhdm.h>
 #include <mm/vmm.h>
 #include <mm/heap.h>
 #include <mm/memory.h>
+#include <abi/auxv.h>
+#include <abi/errno.h>
+#include <abi/types.h>
 #include <binary_loaders/elf.h>
 
 typedef int pid_t;
+
+#define WNOHANG 1
 
 #define USER_HEAP_START 0x0000600000000000UL
 #define USER_STACK_TOP 0x0000700000000000UL
@@ -37,7 +43,7 @@ struct exec_args {
     char **envp;
 };
 
-static int setup_user_stack(uintptr_t pml4, char *const argv[], char *const envp[],
+int setup_user_stack(uintptr_t pml4, char *const argv[], char *const envp[],
                             const char *path, const struct elf64_load_info *info,
                             uint64_t *out_rsp) {
     void *base = vmm_map_region((uint64_t *)pml4,
@@ -133,7 +139,7 @@ static int setup_user_stack(uintptr_t pml4, char *const argv[], char *const envp
     kfree(arg_strs);
     kfree(env_strs);
 
-    *out_rsp = (uint64_t)p - 8;
+    *out_rsp = (uint64_t)p;
     return 0;
 }
 
@@ -200,6 +206,9 @@ void _exit(uint64_t exit_code) {
     struct pcb *p = sched_current_proc();
     if (p) {
         p->exit_code = exit_code;
+        print("EXIT pid=%d code=%lu\n", p->pid, (unsigned long)exit_code);
+    } else {
+        print("EXIT tid=%d code=%lu (no proc)\n", current_tcb->tid, (unsigned long)exit_code);
     }
 
     current_tcb->state = Exited;
@@ -236,7 +245,7 @@ pid_t fork() {
     }
     asm volatile ("fxsave %0" : : "m"(*(uint8_t (*)[512])cfpu) : "memory");
 
-    cp->pid = proc_count++;
+    cp->pid = ++proc_count;
     cp->t_count = 1;
     cp->addr_space = address_space;
     cp->t = NULL;
@@ -244,6 +253,8 @@ pid_t fork() {
     cp->heap_end = p->heap_end;
     cp->exit_code = 0;
     cp->stopped = p->stopped;
+    cp->is_zombie = 0;
+    cp->ppcb = p;
     cp->umask = p->umask;
     cp->mmap_cursor = p->mmap_cursor;
     cp->mmaps = NULL;
@@ -272,13 +283,33 @@ pid_t fork() {
     uint64_t *sp = (uint64_t *)(kstack + KSTACK_SIZE);
     uint64_t *src = (uint64_t *)current_tcb->kstack_top;
 
-    sp -= 18;
-    memcpy(sp, src - 18, 18 * sizeof(uint64_t));
+    for (int i = 0; i < 22; i++) {
+        print("STK[-%d] = %016lx\n", i + 1, src[-(i + 1)]);
+    }
 
-    sp -= 17;
+    sp -= 22;
+    sp[0] = src[-21];
+    sp[1] = src[-20];
+    sp[2] = src[-19];
+    sp[3] = src[-18];
+    sp[4] = src[-17];
+    sp[5] = src[-16];
+    sp[6] = src[-15];
+    sp[7] = src[-14];
+    sp[8] = src[-13];
+    sp[9] = src[-11];
+    sp[10] = src[-12];
+    sp[11] = src[-10];
+    sp[12] = src[-9];
+    sp[13] = src[-8];
     sp[14] = 0;
-    sp[15] = 0x202;
+    sp[15] = src[-3];
     sp[16] = (uint64_t)fork_child_restore;
+    sp[17] = src[-5];
+    sp[18] = src[-4];
+    sp[19] = src[-3];
+    sp[20] = src[-2];
+    sp[21] = src[-1];
 
     ct->tid = thread_count++;
     ct->ksp = sp;
@@ -288,6 +319,7 @@ pid_t fork() {
     ct->fpu_area = cfpu;
     ct->parent = cp;
     ct->state = Ready;
+    ct->fs_base = current_tcb->fs_base;
 
     if (thread_list == NULL) {
         thread_list = ct;
@@ -300,6 +332,7 @@ pid_t fork() {
     cp->t = ct;
     ct->proc_next = ct;
 
+    print("FORK parent=%d child=%d (tid %d)\n", p->pid, cp->pid, ct->tid);
     return (pid_t)cp->pid;
 }
 
@@ -309,19 +342,24 @@ int execve(const char *path, char *const argv[], char *const envp[]) {
         return -1;
     }
 
+    print("EXECVE pid=%d path=%s\n", p->pid, path);
+
     struct exec_args args;
     if (snapshot_exec_args(path, argv, envp, &args)) {
+        print("EXECVE fail: snapshot\n");
         return -1;
     }
 
     int fd = open(args.path, O_RDONLY);
     if (fd < 0) {
+        print("EXECVE fail: open %s\n", args.path);
         return -1;
     }
 
     uintptr_t new_pml4 = paging_create_pml4();
     if (!new_pml4) {
         close(fd);
+        print("EXECVE fail: create_pml4\n");
         return -1;
     }
 
@@ -329,6 +367,7 @@ int execve(const char *path, char *const argv[], char *const envp[]) {
     uint64_t entry = elf64_parse(fd, new_pml4, &info);
     close(fd);
     if (!entry) {
+        print("EXECVE fail: elf\n");
         paging_destroy_address_space(new_pml4);
         return -1;
     }
@@ -346,6 +385,7 @@ int execve(const char *path, char *const argv[], char *const envp[]) {
         reload_cr3(p->addr_space);
         asm volatile ("sti");
         paging_destroy_address_space(new_pml4);
+        print("EXECVE fail: setup_stack\n");
         return -1;
     }
 
@@ -364,6 +404,7 @@ int execve(const char *path, char *const argv[], char *const envp[]) {
     p->sigstate.pending = 0;
     current_tcb->addr_space = new_pml4;
     current_tcb->tsp = (void *)stack_top;
+    current_tcb->fs_base = 0;
 
     paging_destroy_address_space(old_pml4);
 
@@ -378,7 +419,107 @@ int execve(const char *path, char *const argv[], char *const envp[]) {
     sp[16] = (uint64_t)jump_to_user;
     current_tcb->ksp = sp;
 
+    print("EXECVE pid=%d jump_to_user entry=%lx stack=%lx\n", p->pid, (unsigned long)entry, (unsigned long)stack_top);
+
+    extern volatile struct limine_framebuffer_request framebuffer_request;
+    if (framebuffer_request.response && framebuffer_request.response->framebuffer_count > 0) {
+        uint64_t fbaddr = (uint64_t)framebuffer_request.response->framebuffers[0]->address;
+        uint64_t fbidx = (fbaddr >> 39) & 0x1FF;
+        uint64_t *np4 = phys_to_virt(new_pml4);
+        uint64_t *kp4 = phys_to_virt((uintptr_t)kernel_pml4);
+        print("EXECVE fbaddr=%lx fbidx=%lu newpml4_ent=%lx kernpml4_ent=%lx newpml4=%lx\n",
+              (unsigned long)fbaddr, (unsigned long)fbidx, (unsigned long)np4[fbidx],
+              (unsigned long)kp4[fbidx], (unsigned long)new_pml4);
+    }
+
     exec_switch_resume(sp);
 
     return -1;
+}
+
+int pause() {
+    struct pcb *p = sched_current_proc();
+    if (!p) {
+        return -1;
+    }
+
+    current_tcb->state = Blocked;
+
+    while (p->sigstate.pending == 0) {
+        schedule();
+        if (p->sigstate.pending == 0) {
+            current_tcb->state = Blocked;
+        }
+    }
+
+    current_tcb->state = Ready;
+
+    return -1;
+}
+
+int waitpid(int pid, int *status, int options) {
+    struct pcb *p = sched_current_proc();
+    if (!p) {
+        errno = ECHILD;
+        return -1;
+    }
+
+    for (;;) {
+        struct pcb *child = NULL;
+
+        if (pid > 0) {
+            struct pcb *c = proc_find((uint64_t)pid);
+            if (c && c->ppcb == p && c->is_zombie) {
+                child = c;
+            } else if (!c || c->ppcb != p) {
+                errno = ESRCH;
+                return -1;
+            }
+        } else if (pid == -1) {
+            for (struct pcb *z = zombie_head; z; z = z->z_next) {
+                if (z->ppcb == p) {
+                    zombie_remove(z);
+                    child = z;
+                    break;
+                }
+            }
+        } else {
+            errno = EINVAL;
+            return -1;
+        }
+
+        if (child) {
+            if (status) {
+                *status = (int)child->exit_code;
+            }
+            uint64_t cpid = child->pid;
+            proc_destroy(child);
+            return (int)cpid;
+        }
+
+        if (options & WNOHANG) {
+            return 0;
+        }
+
+        if (pid == -1) {
+            int has_child = 0;
+            if (proc_list) {
+                struct pcb *r = proc_list;
+                do {
+                    if (r->ppcb == p) {
+                        has_child = 1;
+                        break;
+                    }
+                    r = r->next;
+                } while (r != proc_list);
+            }
+            if (!has_child) {
+                errno = ECHILD;
+                return -1;
+            }
+        }
+
+        current_tcb->state = Ready;
+        schedule();
+    }
 }

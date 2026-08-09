@@ -1,31 +1,47 @@
-#define SYS_WRITE 1
-#define SYS_GETPID 39
-#define SYS_EXIT 60
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/utsname.h>
+#include <unistd.h>
 
-static inline long syscall3(long num, long a1, long a2, long a3) {
-    long ret;
-    asm volatile ("syscall"
-                  : "=a"(ret)
-                  : "a"(num), "D"(a1), "S"(a2), "d"(a3)
-                  : "rcx", "r11", "memory");
-    return ret;
+static int failed;
+
+static void check(const char *name, int ok) {
+    printf("syscall_test: %s %s\n", name, ok ? "OK" : "FAIL");
+    if (!ok)
+        failed = 1;
 }
 
-void _start() {
-    const char *m1 = "syscall_test: start\n";
-    syscall3(SYS_WRITE, 1, (long)m1, 21);
+int main(void) {
+    printf("syscall_test: start\n");
 
-    long pid = syscall3(SYS_GETPID, 0, 0, 0);
-    if (pid <= 0) {
-        const char *err = "syscall_test: FAIL getpid\n";
-        syscall3(SYS_WRITE, 1, (long)err, 26);
-        syscall3(SYS_EXIT, 1, 0, 0);
-        for (;;);
+    pid_t pid = getpid();
+    check("getpid", pid > 0);
+
+    char cwd[256];
+    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+        check("getcwd", 0);
+    } else {
+        printf("syscall_test: cwd=%s\n", cwd);
+        check("getcwd", 1);
     }
 
-    const char *m2 = "syscall_test: getpid OK\n";
-    syscall3(SYS_WRITE, 1, (long)m2, 25);
+    struct utsname uts;
+    if (uname(&uts) == 0) {
+        printf("syscall_test: uname sysname=%s release=%s\n", uts.sysname, uts.release);
+        check("uname", 1);
+    } else {
+        check("uname", 0);
+    }
 
-    syscall3(SYS_EXIT, 0, 0, 0);
-    for (;;);
+    uid_t uid = getuid();
+    gid_t gid = getgid();
+    uid_t euid = geteuid();
+    gid_t egid = getegid();
+    printf("syscall_test: pid=%d uid=%d gid=%d euid=%d egid=%d\n",
+           (int)pid, (int)uid, (int)gid, (int)euid, (int)egid);
+    check("uid/gid", uid == 0 && gid == 0 && euid == 0 && egid == 0);
+
+    printf("syscall_test: %s\n", failed ? "FAILED" : "ALL OK");
+    return failed;
 }

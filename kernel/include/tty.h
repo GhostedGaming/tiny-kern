@@ -59,6 +59,29 @@ struct tty {
     uint32_t   max_rows;
     uint32_t   origin_x;
     uint32_t   origin_y;
+
+    uint8_t    esc_state;
+    uint8_t    esc_priv;
+    int        esc_param[4];
+    int        esc_nparam;
+    uint32_t   fg;
+    uint32_t   bg;
+};
+
+struct termios_user {
+    uint32_t c_iflag;
+    uint32_t c_oflag;
+    uint32_t c_cflag;
+    uint32_t c_lflag;
+    uint8_t  c_line;
+    uint8_t  c_cc[32];
+    uint32_t c_ibaud;
+    uint32_t c_obaud;
+};
+
+struct ttyinfo {
+    uint32_t rows;
+    uint32_t cols;
 };
 
 void tty_init(void (*output_fn)(tty_t *tty, char c));
@@ -68,3 +91,6 @@ tty_t *tty_get(uint8_t index);
 void tty_input(tty_t *tty, char c);
 int32_t tty_write(tty_t *tty, const uint8_t *buf, uint32_t count);
 int32_t tty_read(tty_t *tty, uint8_t *buf, uint32_t count);
+int tty_getattr(tty_t *tty, struct termios_user *u);
+int tty_setattr(tty_t *tty, const struct termios_user *u);
+int tty_getinfo(tty_t *tty, struct ttyinfo *info);

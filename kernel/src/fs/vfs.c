@@ -12,6 +12,7 @@
 #include <multitasking/sched.h>
 #include <multitasking/proc.h>
 #include <fs/vfs.h>
+#include <logging/print.h>
 
 #define MAX_DRIVES  254
 #define MAX_FD      256
@@ -728,16 +729,27 @@ ssize_t read(int fd, void *buf, size_t count) {
 }
 
 ssize_t write(int fd, const void *buf, size_t count) {
+    extern struct pcb *sched_current_proc(void);
+    struct pcb *wproc = sched_current_proc();
     vfs_file_t *file = fd_get(fd);
-    if (!file) { errno = EBADF; return -1; }
+    if (!file) {
+        print("WRITE pid=%d fd=%d FAIL no-file\n", wproc ? wproc->pid : -1, fd);
+        errno = EBADF; return -1;
+    }
     if (!buf) { errno = EINVAL; return -1; }
     if (!count) return 0;
 
     int acc = file->flags & O_ACCMODE;
-    if (acc == O_RDONLY) { errno = EBADF; return -1; }
+    if (acc == O_RDONLY) {
+        print("WRITE pid=%d fd=%d FAIL readonly\n", wproc ? wproc->pid : -1, fd);
+        errno = EBADF; return -1;
+    }
 
     vfs_node_t *node = file->node;
-    if (!node) { errno = EBADF; return -1; }
+    if (!node) {
+        print("WRITE pid=%d fd=%d FAIL no-node\n", wproc ? wproc->pid : -1, fd);
+        errno = EBADF; return -1;
+    }
 
     if (node->type == VFS_NODE_DIR) { errno = EISDIR; return -1; }
 
@@ -754,7 +766,10 @@ ssize_t write(int fd, const void *buf, size_t count) {
         return -1;
     }
 
-    if (!node->ops || !node->ops->write) { errno = EBADF; return -1; }
+    if (!node->ops || !node->ops->write) {
+        print("WRITE pid=%d fd=%d FAIL no-ops\n", wproc ? wproc->pid : -1, fd);
+        errno = EBADF; return -1;
+    }
     ssize_t n = node->ops->write(node, buf, count, file->offset);
     if (n > 0) file->offset += n;
     return n;
@@ -830,7 +845,7 @@ int vfs_fstat(int fd, vfs_stat_t *st) {
     return 0;
 }
 
-static void stat_to_linux(const vfs_stat_t *in, struct stat *out) {
+static void stat_to_abi(const vfs_stat_t *in, struct stat *out) {
     out->st_dev = 0;
     out->st_ino = in->st_ino;
     out->st_nlink = in->st_nlink;
@@ -848,29 +863,26 @@ static void stat_to_linux(const vfs_stat_t *in, struct stat *out) {
     out->st_mtim.tv_nsec = 0;
     out->st_ctim.tv_sec = in->st_ctime;
     out->st_ctim.tv_nsec = 0;
-    out->__unused[0] = 0;
-    out->__unused[1] = 0;
-    out->__unused[2] = 0;
 }
 
 int stat(const char *path, struct stat *st) {
     vfs_stat_t in;
     if (vfs_stat(path, &in) != 0) return -1;
-    stat_to_linux(&in, st);
+    stat_to_abi(&in, st);
     return 0;
 }
 
 int lstat(const char *path, struct stat *st) {
     vfs_stat_t in;
     if (vfs_lstat(path, &in) != 0) return -1;
-    stat_to_linux(&in, st);
+    stat_to_abi(&in, st);
     return 0;
 }
 
 int fstat(int fd, struct stat *st) {
     vfs_stat_t in;
     if (vfs_fstat(fd, &in) != 0) return -1;
-    stat_to_linux(&in, st);
+    stat_to_abi(&in, st);
     return 0;
 }
 
@@ -1160,10 +1172,10 @@ ssize_t writev(int fd, const struct iovec *iov, int iovcnt) {
 
 static uint8_t dirent_type_to_dt(uint32_t type) {
     switch (type) {
-        case VFS_NODE_DIR:      return 4;
-        case VFS_NODE_SYMLINK:  return 10;
-        case VFS_NODE_DEV:      return 6;
-        default:                return 8;
+        case VFS_NODE_DIR:      return DT_DIR;
+        case VFS_NODE_SYMLINK:  return DT_LNK;
+        case VFS_NODE_DEV:      return DT_CHR;
+        default:                return DT_REG;
     }
 }
 
@@ -1190,12 +1202,12 @@ ssize_t getdents64(int fd, void *buf, size_t count) {
         if (!ent) break;
 
         size_t namelen = strlen(ent->d_name);
-        size_t reclen = offsetof(struct linux_dirent64, d_name) + namelen + 1;
+        size_t reclen = offsetof(struct tinykern_dirent, d_name) + namelen + 1;
         reclen = (reclen + 7) & ~(size_t)7;
 
         if (written + reclen > count) break;
 
-        struct linux_dirent64 *de = (struct linux_dirent64 *)(out + written);
+        struct tinykern_dirent *de = (struct tinykern_dirent *)(out + written);
         de->d_ino = ent->d_ino;
         de->d_off = dir.pos;
         de->d_reclen = (uint16_t)reclen;

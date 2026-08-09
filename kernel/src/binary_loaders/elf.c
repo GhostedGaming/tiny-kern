@@ -8,43 +8,41 @@
 #include <binary_loaders/elf.h>
 
 uint64_t elf64_parse(int fd, uintptr_t cr3, struct elf64_load_info *info) {
-    int32_t size = vfs_filesize(fd);
-    if (size <= 0)
+    Elf64_Ehdr eh;
+    if (vfs_seek(fd, 0, VFS_SEEK_SET) < 0)
+        return 0;
+    if (vfs_read(fd, &eh, sizeof(eh)) != sizeof(eh))
         return 0;
 
-    void *elf = kmalloc(size);
-    if (!elf)
+    if (eh.e_ident[EI_MAG0] != ELFMAG0 ||
+        eh.e_ident[EI_MAG1] != ELFMAG1 ||
+        eh.e_ident[EI_MAG2] != ELFMAG2 ||
+        eh.e_ident[EI_MAG3] != ELFMAG3)
         return 0;
 
-    if (vfs_seek(fd, 0, VFS_SEEK_SET) < 0) {
-        kfree(elf);
+    if (eh.e_ident[EI_CLASS] != ELFCLASS64)
+        return 0;
+
+    uint64_t phnum = eh.e_phnum;
+    if (phnum == 0)
+        return 0;
+
+    Elf64_Phdr *ph = kmalloc(phnum * sizeof(Elf64_Phdr));
+    if (!ph)
+        return 0;
+
+    if (vfs_seek(fd, eh.e_phoff, VFS_SEEK_SET) < 0) {
+        kfree(ph);
         return 0;
     }
-
-    if (vfs_read(fd, elf, size) != size) {
-        kfree(elf);
-        return 0;
-    }
-
-    Elf64_Ehdr *eh = (Elf64_Ehdr *)elf;
-
-    if (eh->e_ident[EI_MAG0] != ELFMAG0 ||
-        eh->e_ident[EI_MAG1] != ELFMAG1 ||
-        eh->e_ident[EI_MAG2] != ELFMAG2 ||
-        eh->e_ident[EI_MAG3] != ELFMAG3) {
-        kfree(elf);
-        return 0;
-    }
-
-    if (eh->e_ident[EI_CLASS] != ELFCLASS64) {
-        kfree(elf);
+    if (vfs_read(fd, ph, phnum * sizeof(Elf64_Phdr)) != (int)(phnum * sizeof(Elf64_Phdr))) {
+        kfree(ph);
         return 0;
     }
 
     uint64_t *pml4 = (uint64_t *)cr3;
-    Elf64_Phdr *ph = (Elf64_Phdr *)((uint8_t *)elf + eh->e_phoff);
 
-    for (int i = 0; i < eh->e_phnum; i++) {
+    for (uint64_t i = 0; i < phnum; i++) {
         if (ph[i].p_type != PT_LOAD)
             continue;
 
@@ -67,7 +65,7 @@ uint64_t elf64_parse(int fd, uintptr_t cr3, struct elf64_load_info *info) {
             uint64_t va = page_base + (p * 0x1000);
             uintptr_t phys = frame_alloc();
             if (!phys) {
-                kfree(elf);
+                kfree(ph);
                 return 0;
             }
 
@@ -84,32 +82,38 @@ uint64_t elf64_parse(int fd, uintptr_t cr3, struct elf64_load_info *info) {
                     uint64_t avail = filesz - seg_file_off;
                     uint64_t space = 0x1000 - dst_off;
                     uint64_t copy  = avail > space ? space : avail;
-                    memcpy((uint8_t *)dst + dst_off,
-                           (uint8_t *)elf + seg_offset + seg_file_off,
-                           copy);
+
+                    if (vfs_seek(fd, seg_offset + seg_file_off, VFS_SEEK_SET) < 0) {
+                        kfree(ph);
+                        return 0;
+                    }
+                    if (vfs_read(fd, (uint8_t *)dst + dst_off, copy) != copy) {
+                        kfree(ph);
+                        return 0;
+                    }
                 }
             }
         }
     }
 
-    uint64_t entry = eh->e_entry;
+    uint64_t entry = eh.e_entry;
 
     if (info) {
         info->entry = entry;
-        info->phent = eh->e_phentsize;
-        info->phnum = eh->e_phnum;
+        info->phent = eh.e_phentsize;
+        info->phnum = (uint64_t)phnum;
         info->phdr = 0;
-        for (int i = 0; i < eh->e_phnum; i++) {
+        for (uint64_t i = 0; i < phnum; i++) {
             if (ph[i].p_type != PT_LOAD)
                 continue;
-            if (eh->e_phoff >= ph[i].p_offset &&
-                eh->e_phoff < ph[i].p_offset + ph[i].p_filesz) {
-                info->phdr = ph[i].p_vaddr + (eh->e_phoff - ph[i].p_offset);
+            if (eh.e_phoff >= ph[i].p_offset &&
+                eh.e_phoff < ph[i].p_offset + ph[i].p_filesz) {
+                info->phdr = ph[i].p_vaddr + (eh.e_phoff - ph[i].p_offset);
                 break;
             }
         }
     }
 
-    kfree(elf);
+    kfree(ph);
     return entry;
 }

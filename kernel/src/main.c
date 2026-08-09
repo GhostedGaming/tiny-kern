@@ -18,6 +18,7 @@
 #include <fs/devfs.h>
 #include <fs/vfs.h>
 #include <fs/ustar.h>
+#include <fs/ramfs.h>
 #include <multitasking/thread.h>
 #include <multitasking/proc.h>
 #include <multitasking/sched.h>
@@ -31,6 +32,11 @@ extern void jump_to_user(uint64_t entry, uint64_t stack);
 #define USER_STACK_TOP 0x0000700000000000UL
 
 static uint64_t g_init_entry;
+static uint64_t g_init_rsp;
+
+extern int setup_user_stack(uintptr_t pml4, char *const argv[], char *const envp[],
+                            const char *path, const struct elf64_load_info *info,
+                            uint64_t *out_rsp);
 
 static void enable_sse() {
     uint64_t cr0, cr4;
@@ -57,7 +63,7 @@ static void enable_sse() {
 }
 
 static void init_thread_entry() {
-    jump_to_user(g_init_entry, USER_STACK_TOP - 8);
+    jump_to_user(g_init_entry, g_init_rsp);
     print("jump_to_user returned\n");
     for (;;) asm volatile ("hlt");
 }
@@ -76,14 +82,27 @@ static void run_init() {
         return;
     }
 
-    uint64_t entry = elf64_parse(fd, p->addr_space, NULL);
+    struct elf64_load_info info;
+    uint64_t entry = elf64_parse(fd, p->addr_space, &info);
     close(fd);
     if (!entry) {
         print("elf64_parse failed\n");
         return;
     }
 
+    char *init_argv[] = { (char *)"init", NULL };
+    char *init_envp[] = { NULL };
+    uint64_t rsp = 0;
+
+    reload_cr3(p->addr_space);
+    if (setup_user_stack(p->addr_space, init_argv, init_envp, "/ram/bins/init",
+                         &info, &rsp)) {
+        print("setup_user_stack failed\n");
+        return;
+    }
+
     g_init_entry = entry;
+    g_init_rsp = rsp;
     print("loaded /ram/bins/init entry=0x%lX pid=%lu\n", entry, p->pid);
 
     schedule();
@@ -169,6 +188,7 @@ void kmain() {
         void *img = mod->address;
         uint8_t rc = ustar_mount("/ram", img, mod->size);
         print("mounted %s -> status %u\n", mod->path, rc);
+        ramfs_mount("/home");
         run_init();
     } else {
         print("no Limine modules loaded\n");

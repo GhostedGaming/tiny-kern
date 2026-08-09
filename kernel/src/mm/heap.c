@@ -30,23 +30,14 @@ void *kmalloc(uintptr_t size) {
     size_t total_needed = size + sizeof(kmalloc_header_t);
     if (total_needed > PAGE_SIZE) {
         uint64_t frames = (total_needed + PAGE_SIZE - 1) / PAGE_SIZE;
-        uintptr_t top = 0;
-        uintptr_t expected = 0;
-        for (uint64_t i = 0; i < frames; i++) {
-            uintptr_t f = frame_alloc();
-            if (!f || (i > 0 && f != expected)) {
-                if (f) frame_free(f);
-                for (uint64_t j = 0; j < i; j++)
-                    frame_free(top - j * PAGE_SIZE);
-                print("kmalloc: failed to allocate %d contiguous frames\n", (int)frames);
-                spinlock_release_irqrestore(&heap_lock, flags);
-                return NULL;
-            }
-            if (i == 0) top = f;
-            expected = f - PAGE_SIZE;
+        uintptr_t phys = frame_alloc_contig(frames);
+        if (!phys) {
+            print("kmalloc: failed to allocate %d contiguous frames\n", (int)frames);
+            spinlock_release_irqrestore(&heap_lock, flags);
+            return NULL;
         }
 
-        uintptr_t start = top - (frames - 1) * PAGE_SIZE;
+        uintptr_t start = phys;
         kmalloc_header_t *chunk = (kmalloc_header_t *)phys_to_virt(start);
         memset(chunk, 0, PAGE_SIZE * frames);
         chunk->size = size;

@@ -3,6 +3,7 @@
 #include <mm/memory.h>
 #include <mm/frame.h>
 #include <mm/hhdm.h>
+#include <logging/print.h>
 #include <mm/page.h>
 
 extern volatile struct limine_framebuffer_request framebuffer_request;
@@ -330,6 +331,10 @@ static uint8_t map_framebuffer(uint64_t *pml4) {
     uintptr_t fb_virt_start = (uintptr_t)phys_to_virt(fb_phys_start) & ~0xFFFULL; 
     size_t fb_size = (size_t)fb->pitch * (size_t)fb->height;
     size_t fb_pages_size = (fb_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+    print("FRAMEBUFFER limine_addr=%lx phys=%lx virt=%lx size=%lx pitch=%u height=%u\n",
+          (unsigned long)fb->address, (unsigned long)fb_phys_start, (unsigned long)fb_virt_start,
+          (unsigned long)fb_pages_size, (unsigned)fb->pitch, (unsigned)fb->height);
 
     for (size_t off = 0; off < fb_pages_size; off += PAGE_SIZE) {
         if (paging_map_page(pml4,

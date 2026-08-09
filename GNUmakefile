@@ -154,6 +154,26 @@ run-hdd-bios: $(IMAGE_NAME).hdd
 		-hda $(IMAGE_NAME).hdd \
 		$(QEMUFLAGS)
 
+.PHONY: mlibc
+mlibc:
+	rm -rf mlibc/build
+	
+	cd mlibc && meson setup build \
+		--cross-file crossfile \
+		-Ddefault_library=static \
+		-Db_staticpic=false \
+		-Dposix_option=enabled \
+		--prefix=/usr/local
+	
+	cd mlibc && ninja -C build
+	
+	cd mlibc && DESTDIR=$$(pwd)/build/install ninja -C build install
+
+.PHONY: test_programs
+test_programs: mlibc
+	$(MAKE) -C test_programs clean
+	$(MAKE) -C test_programs
+
 edk2-ovmf-bins:
 	curl -L https://github.com/osdev0/edk2-ovmf-stable-bins/releases/latest/download/edk2-ovmf-bins.tar.gz | gunzip | tar -xf -
 
@@ -229,7 +249,7 @@ clone:
 kernel: kernel/.deps-obtained
 	$(MAKE) -C kernel
 
-test_programs.tar: test_programs/GNUmakefile $(wildcard test_programs/*.c test_programs/*.ld)
+test_programs.tar: test_programs/GNUmakefile $(wildcard test_programs/*.c test_programs/*.ld test_programs/usr/src/*.c) tools/tcc-0.9.27/tcc tools/tcc-0.9.27/libtcc1.a
 	$(MAKE) -C test_programs
 	tar --format=ustar -C test_programs -cf $@ .
 

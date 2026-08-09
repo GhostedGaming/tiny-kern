@@ -27,6 +27,7 @@ struct tcb {
     struct pcb *parent;
     void *fpu_area;
     uint8_t state;
+    uint64_t fs_base;
 } __attribute__((packed));
 
 extern struct tcb *thread_list;

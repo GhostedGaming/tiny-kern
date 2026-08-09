@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stddef.h>
 #include <signal.h>
 
 #define MAX_FDS 256
@@ -23,6 +24,10 @@ struct pcb {
     uintptr_t heap_end;
     uint64_t exit_code;
     uint8_t stopped;
+    uint8_t is_zombie;
+    struct pcb *ppcb;
+    struct pcb *z_prev;
+    struct pcb *z_next;
     sigstate_t sigstate;
     uint32_t umask;
     struct mmap_region *mmaps;
@@ -38,3 +43,9 @@ struct pcb *proc_create(void *entry);
 struct pcb *proc_find(uint64_t pid);
 void proc_destroy(struct pcb *p);
 uintptr_t proc_sbrk(struct pcb *p, intptr_t increment);
+int waitpid(int pid, int *status, int options);
+
+void zombie_enqueue(struct pcb *p);
+void zombie_remove(struct pcb *p);
+struct pcb *zombie_pop(void);
+extern struct pcb *zombie_head;

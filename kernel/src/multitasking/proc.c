@@ -16,6 +16,72 @@
 
 struct pcb *proc_list = NULL;
 uint64_t proc_count = 0;
+struct pcb *zombie_head = NULL;
+static struct pcb *zombie_tail = NULL;
+
+void zombie_enqueue(struct pcb *p) {
+    if (p->z_next || p->z_prev) {
+        return;
+    }
+    if (zombie_head == NULL) {
+        zombie_head = zombie_tail = p;
+        p->z_next = p->z_prev = NULL;
+    } else {
+        zombie_tail->z_next = p;
+        p->z_prev = zombie_tail;
+        p->z_next = NULL;
+        zombie_tail = p;
+    }
+}
+
+void zombie_remove(struct pcb *p) {
+    if (!p || !zombie_head) {
+        return;
+    }
+    struct pcb *n = p->z_next;
+    struct pcb *pr = p->z_prev;
+    if (pr) {
+        pr->z_next = n;
+    } else {
+        zombie_head = n;
+    }
+    if (n) {
+        n->z_prev = pr;
+    } else {
+        zombie_tail = pr;
+    }
+    p->z_next = p->z_prev = NULL;
+}
+
+struct pcb *zombie_pop(void) {
+    if (!zombie_head) {
+        return NULL;
+    }
+    struct pcb *p = zombie_head;
+    zombie_remove(p);
+    return p;
+}
+
+static void reparent_children(struct pcb *p) {
+    struct pcb *target = proc_find(1);
+    if (!target || target == p) {
+        struct pcb *r = proc_list;
+        if (r == p) {
+            r = r->next;
+        }
+        target = (r && r != p) ? r : NULL;
+    }
+    if (!target || !proc_list) {
+        return;
+    }
+    struct pcb *r = proc_list;
+    do {
+        if (r->ppcb == p) {
+            r->ppcb = target;
+        }
+        r = r->next;
+    } while (r != proc_list);
+}
 
 struct pcb *proc_create(void *entry) {
     struct pcb *p = (struct pcb *)kmalloc(sizeof(struct pcb));
@@ -23,7 +89,7 @@ struct pcb *proc_create(void *entry) {
         return NULL;
     }
 
-    p->pid = proc_count++;
+    p->pid = ++proc_count;
     p->t_count = 0;
     p->addr_space = paging_create_pml4();
     p->t = NULL;
@@ -31,6 +97,8 @@ struct pcb *proc_create(void *entry) {
     p->heap_end = USER_HEAP_START;
     p->exit_code = 0;
     p->stopped = 0;
+    p->is_zombie = 0;
+    p->ppcb = NULL;
     p->umask = 0022;
     p->mmaps = NULL;
     p->mmap_cursor = USER_MMAP_START;
@@ -120,6 +188,8 @@ uintptr_t proc_sbrk(struct pcb *p, intptr_t increment) {
 }
 
 void proc_destroy(struct pcb *p) {
+    reparent_children(p);
+    zombie_remove(p);
     vfs_fd_table_close(p->fd_table, MAX_FDS);
 
     while (p->t != NULL) {

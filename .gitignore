@@ -1,5 +1,10 @@
 /limine-binary
 /edk2-ovmf-bins
+/sysroot
+/.cache
+/tools/build-*
+/tools/cross
+/test_programs/bins
 *.iso
 *.hdd
 *.img

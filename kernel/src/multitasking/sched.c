@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <logging/print.h>
 #include <multitasking/thread.h>
+#include <multitasking/proc.h>
 #include <multitasking/sched.h>
 
 struct blocked_list {
@@ -12,6 +13,20 @@ extern void switch_task(struct tcb *t);
 
 struct tcb *current_tcb = NULL;
 
+static int proc_in_list(struct pcb *p) {
+    if (!proc_list || !p) {
+        return 0;
+    }
+    struct pcb *r = proc_list;
+    do {
+        if (r == p) {
+            return 1;
+        }
+        r = r->next;
+    } while (r != proc_list);
+    return 0;
+}
+
 static void reap_exited() {
     if (!thread_list) {
         return;
@@ -21,10 +36,31 @@ static void reap_exited() {
     do {
         struct tcb *next = r->next;
         if (r->state == Exited && r != current_tcb) {
-            struct pcb *parent = r->parent;
+            struct pcb *owner = r->parent;
+            int all_exited = 0;
+            if (owner) {
+                all_exited = 1;
+                if (owner->t) {
+                    struct tcb *u = owner->t;
+                    do {
+                        if (u->state != Exited) {
+                            all_exited = 0;
+                            break;
+                        }
+                        u = u->proc_next;
+                    } while (u != owner->t);
+                }
+            }
+            if (all_exited && owner->ppcb && proc_in_list(owner->ppcb) &&
+                !owner->ppcb->is_zombie) {
+                owner->is_zombie = 1;
+                zombie_enqueue(owner);
+                r = next;
+                continue;
+            }
             destroy_thread(r);
-            if (parent && parent->t_count == 0 && parent->t == NULL) {
-                proc_destroy(parent);
+            if (owner && owner->t_count == 0 && owner->t == NULL) {
+                proc_destroy(owner);
             }
             if (!thread_list) {
                 return;
@@ -99,6 +135,11 @@ struct tcb *block_current() {
     struct tcb *t = current_tcb;
     print("Blocking %d\n", t->tid);
     schedule();
+
+    while (current_tcb == t && t->state == Blocked) {
+        asm volatile ("sti");
+        asm volatile ("hlt");
+    }
     return t;
 }
 

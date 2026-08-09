@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <limine.h>
+#include <portio.h>
 #include <mm/memory.h>
 #include <mm/heap.h>
 #include <fs/vfs.h>
@@ -119,9 +120,8 @@ static uint8_t tty_font[128][8] = {
 
 static void tty_new_line(tty_t *tty) {
     tty->col = 0;
-    tty->row++;
 
-    if (tty->row >= tty->max_rows) {
+    if (tty->row + 1 >= tty->max_rows) {
         uint32_t stride = framebuffer_request.response->framebuffers[0]->pitch / 4;
         uint32_t *fb = framebuffer_request.response->framebuffers[0]->address;
         uint32_t row_bytes = stride * GLYPH_H;
@@ -136,11 +136,20 @@ static void tty_new_line(tty_t *tty) {
         memset(last_row, 0, row_bytes * sizeof(uint32_t));
 
         tty->row = tty->max_rows - 1;
+    } else {
+        tty->row++;
+    }
+}
+
+static void tty_scroll_if_needed(tty_t *tty) {
+    if (tty->row >= tty->max_rows) {
+        tty_new_line(tty);
     }
 }
 
 void putchar(tty_t *tty, char c) {
     if (c == ' ') {
+        tty_scroll_if_needed(tty);
         uint32_t stride = framebuffer_request.response->framebuffers[0]->pitch / 4;
         uint32_t *fb = framebuffer_request.response->framebuffers[0]->address;
         uint16_t cell_w = GLYPH_W + LETTER_SPACING_PX;
@@ -150,7 +159,7 @@ void putchar(tty_t *tty, char c) {
         for (uint8_t i = 0; i < GLYPH_H; i++) {
             uint32_t *row = &fb[(origin_y + i) * stride + origin_x];
             for (uint8_t j = 0; j < cell_w; j++) {
-                row[j] = 0x00000000;
+                row[j] = tty->bg;
             }
         }
 
@@ -179,6 +188,8 @@ void putchar(tty_t *tty, char c) {
 
     const uint8_t *glyph_rows = tty_font[ch];
 
+    tty_scroll_if_needed(tty);
+
     uint32_t stride = framebuffer_request.response->framebuffers[0]->pitch / 4;
     uint32_t *fb = framebuffer_request.response->framebuffers[0]->address;
     uint16_t cell_w = GLYPH_W + LETTER_SPACING_PX;
@@ -189,16 +200,184 @@ void putchar(tty_t *tty, char c) {
         uint8_t row_bits = glyph_rows[i];
         uint32_t *row = &fb[(origin_y + i) * stride + origin_x];
         for (uint8_t j = 0; j < GLYPH_W; j++) {
-            row[j] = (row_bits & (1 << (7 - j))) ? 0xFFFFFFFF : 0x00000000;
+            row[j] = (row_bits & (1 << (7 - j))) ? tty->fg : tty->bg;
         }
         for (uint8_t j = 0; j < LETTER_SPACING_PX; j++) {
-            row[GLYPH_W + j] = 0x00000000;
+            row[GLYPH_W + j] = tty->bg;
         }
     }
 
     tty->col++;
     if (tty->col >= tty->max_cols)
         tty_new_line(tty);
+}
+
+static void tty_fill_cell(tty_t *tty, uint32_t row, uint32_t col, uint32_t color) {
+    if (row >= tty->max_rows || col >= tty->max_cols) return;
+
+    uint32_t stride = framebuffer_request.response->framebuffers[0]->pitch / 4;
+    uint32_t *fb = framebuffer_request.response->framebuffers[0]->address;
+    uint16_t cell_w = GLYPH_W + LETTER_SPACING_PX;
+    uint32_t origin_x = tty->origin_x + (col * cell_w);
+    uint32_t origin_y = tty->origin_y + (row * GLYPH_H);
+
+    for (uint8_t i = 0; i < GLYPH_H; i++) {
+        uint32_t *px = &fb[(origin_y + i) * stride + origin_x];
+        for (uint8_t j = 0; j < cell_w; j++) {
+            px[j] = color;
+        }
+    }
+}
+
+static void tty_clear_screen(tty_t *tty) {
+    for (uint32_t r = 0; r < tty->max_rows; r++)
+        for (uint32_t c = 0; c < tty->max_cols; c++)
+            tty_fill_cell(tty, r, c, tty->bg);
+}
+
+static void tty_clear_line(tty_t *tty, int from, int to) {
+    if (to < from) {
+        int t = from; from = to; to = t;
+    }
+    if (from < 0) from = 0;
+    if (to >= (int)tty->max_cols) to = (int)tty->max_cols - 1;
+    for (int c = from; c <= to; c++)
+        tty_fill_cell(tty, tty->row, (uint32_t)c, tty->bg);
+}
+
+static void tty_set_cursor(tty_t *tty, uint32_t row, uint32_t col) {
+    tty->row = (row >= tty->max_rows) ? tty->max_rows - 1 : row;
+    tty->col = (col >= tty->max_cols) ? tty->max_cols - 1 : col;
+}
+
+static void tty_move_cursor(tty_t *tty, int drow, int dcol) {
+    if (drow < 0) {
+        int n = -drow;
+        tty->row = (tty->row > (uint32_t)n) ? tty->row - n : 0;
+    } else {
+        tty->row += (uint32_t)drow;
+        if (tty->row >= tty->max_rows) tty->row = tty->max_rows - 1;
+    }
+    if (dcol < 0) {
+        int n = -dcol;
+        tty->col = (tty->col > (uint32_t)n) ? tty->col - n : 0;
+    } else {
+        tty->col += (uint32_t)dcol;
+        if (tty->col >= tty->max_cols) tty->col = tty->max_cols - 1;
+    }
+}
+
+static int tty_esc_param(tty_t *tty, int i) {
+    return tty->esc_param[i] ? tty->esc_param[i] : 1;
+}
+
+static void tty_esc_reset(tty_t *tty) {
+    tty->esc_state = 0;
+    tty->esc_priv = 0;
+    tty->esc_nparam = 0;
+    tty->esc_param[0] = 0;
+    tty->esc_param[1] = 0;
+    tty->esc_param[2] = 0;
+    tty->esc_param[3] = 0;
+}
+
+static void tty_esc_finish(tty_t *tty, char c) {
+    switch (c) {
+        case 'A': tty_move_cursor(tty, -(int)tty_esc_param(tty, 0), 0); break;
+        case 'B': tty_move_cursor(tty, tty_esc_param(tty, 0), 0); break;
+        case 'C': tty_move_cursor(tty, 0, tty_esc_param(tty, 0)); break;
+        case 'D': tty_move_cursor(tty, 0, -(int)tty_esc_param(tty, 0)); break;
+        case 'H':
+        case 'f': {
+            int row = tty_esc_param(tty, 0) - 1;
+            int col = tty->esc_nparam >= 1 ? tty_esc_param(tty, 1) - 1 : 0;
+            tty_set_cursor(tty, (uint32_t)row, (uint32_t)col);
+            break;
+        }
+        case 'J': {
+            int n = tty_esc_param(tty, 0);
+            if (n == 0) {
+                for (uint32_t cc = tty->col; cc < tty->max_cols; cc++)
+                    tty_fill_cell(tty, tty->row, cc, tty->bg);
+                for (uint32_t rr = tty->row + 1; rr < tty->max_rows; rr++)
+                    for (uint32_t cc = 0; cc < tty->max_cols; cc++)
+                        tty_fill_cell(tty, rr, cc, tty->bg);
+            } else if (n == 1) {
+                for (uint32_t rr = 0; rr < tty->row; rr++)
+                    for (uint32_t cc = 0; cc < tty->max_cols; cc++)
+                        tty_fill_cell(tty, rr, cc, tty->bg);
+                for (uint32_t cc = 0; cc <= tty->col; cc++)
+                    tty_fill_cell(tty, tty->row, cc, tty->bg);
+            } else {
+                tty_clear_screen(tty);
+                tty_set_cursor(tty, 0, 0);
+            }
+            break;
+        }
+        case 'K': {
+            int n = tty->esc_nparam ? tty_esc_param(tty, 0) : 0;
+            if (n == 0) tty_clear_line(tty, (int)tty->col, (int)tty->max_cols - 1);
+            else if (n == 1) tty_clear_line(tty, 0, (int)tty->col);
+            else tty_clear_line(tty, 0, (int)tty->max_cols - 1);
+            break;
+        }
+        case 'm': {
+            int n = tty->esc_nparam ? (int)tty->esc_param[0] : 0;
+            if (n == 7) {
+                tty->fg = 0x00000000;
+                tty->bg = 0xFFFFFFFF;
+            } else if (n == 0) {
+                tty->fg = 0xFFFFFFFF;
+                tty->bg = 0x00000000;
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    tty_esc_reset(tty);
+}
+
+static void tty_esc_input(tty_t *tty, char c) {
+    if (tty->esc_state == 1) {
+        if (c == '[') {
+            tty->esc_state = 2;
+            tty->esc_priv = 0;
+            tty->esc_nparam = 0;
+            tty->esc_param[0] = 0;
+            tty->esc_param[1] = 0;
+            tty->esc_param[2] = 0;
+            tty->esc_param[3] = 0;
+        } else {
+            tty_esc_reset(tty);
+        }
+        return;
+    }
+
+    if (c == '?') {
+        tty->esc_priv = 1;
+        return;
+    }
+
+    if (c >= '0' && c <= '9') {
+        int i = tty->esc_nparam > 3 ? 3 : tty->esc_nparam;
+        tty->esc_param[i] = tty->esc_param[i] * 10 + (c - '0');
+        return;
+    }
+
+    if (c == ';') {
+        if (tty->esc_nparam < 3) tty->esc_nparam++;
+        return;
+    }
+
+    if ((c >= '@' && c <= '~') || c == 'H' || c == 'f' || c == 'm') {
+        if (tty->esc_priv == 0)
+            tty_esc_finish(tty, c);
+        else
+            tty_esc_reset(tty);
+    } else {
+        tty_esc_reset(tty);
+    }
 }
 
 static void ring_push(tty_ring_t *r, uint8_t c) {
@@ -227,6 +406,9 @@ static void tty_putchar_raw(tty_t *tty, char c) {
     if ((tty->termios.c_oflag & OPOST) && (tty->termios.c_oflag & ONLCR) && c == '\n')
         tty->putchar(tty, '\r');
     tty->putchar(tty, c);
+    if (c == '\n')
+        outb(0xE9, '\r');
+    outb(0xE9, (uint8_t)c);
 }
 
 void tty_input(tty_t *tty, char c) {
@@ -268,8 +450,16 @@ void tty_input(tty_t *tty, char c) {
 
 int32_t tty_write(tty_t *tty, const uint8_t *buf, uint32_t count) {
     if (!tty || !tty->putchar) return -1;
-    for (uint32_t i = 0; i < count; i++)
-        tty_putchar_raw(tty, (char)buf[i]);
+    for (uint32_t i = 0; i < count; i++) {
+        char c = (char)buf[i];
+        if (tty->esc_state != 0) {
+            tty_esc_input(tty, c);
+        } else if (c == '\x1B') {
+            tty->esc_state = 1;
+        } else {
+            tty_putchar_raw(tty, c);
+        }
+    }
     return (int32_t)count;
 }
 
@@ -364,6 +554,8 @@ void tty_init(void (*output_fn)(tty_t *tty, char c)) {
         t->max_rows  = max_rows;
         t->origin_x  = 0;
         t->origin_y  = 0;
+        t->fg        = 0xFFFFFFFF;
+        t->bg        = 0x00000000;
 
         char name[8];
         name[0] = 't'; name[1] = 't'; name[2] = 'y';
@@ -373,4 +565,65 @@ void tty_init(void (*output_fn)(tty_t *tty, char c)) {
     }
 
     devfs_register("tty", devfs_tty_alias_read, devfs_tty_alias_write, NULL);
+}
+
+static void tty_cc_kernel_to_user(const uint8_t *k, uint8_t *u) {
+    for (int i = 0; i < 32; i++) u[i] = 0;
+    u[0] = k[0];
+    u[1] = 0;
+    u[2] = k[2];
+    u[3] = k[3];
+    u[4] = k[4];
+    u[5] = k[6];
+    u[6] = k[5];
+    u[7] = k[7];
+}
+
+static void tty_cc_user_to_kernel(const uint8_t *u, uint8_t *k) {
+    for (int i = 0; i < 8; i++) k[i] = 0;
+    k[0] = u[0];
+    k[2] = u[2];
+    k[3] = u[3];
+    k[4] = u[4];
+    k[5] = u[6];
+    k[6] = u[5];
+    k[7] = u[7];
+}
+
+int tty_getattr(tty_t *tty, struct termios_user *u) {
+    if (!tty || !u) return -1;
+
+    u->c_iflag = tty->termios.c_iflag;
+    u->c_oflag = tty->termios.c_oflag;
+    u->c_cflag = 0000060 | 0000200;
+    u->c_lflag = tty->termios.c_lflag;
+    u->c_line = 0;
+    tty_cc_kernel_to_user(tty->termios.c_cc, u->c_cc);
+    u->c_ibaud = 0000015;
+    u->c_obaud = 0000015;
+    return 0;
+}
+
+int tty_setattr(tty_t *tty, const struct termios_user *u) {
+    if (!tty || !u) return -1;
+
+    tty->termios.c_iflag = u->c_iflag;
+    tty->termios.c_oflag = u->c_oflag;
+    tty->termios.c_lflag = u->c_lflag;
+    tty_cc_user_to_kernel(u->c_cc, tty->termios.c_cc);
+
+    tty->raw.head = 0;
+    tty->raw.tail = 0;
+    tty->raw.count = 0;
+    tty->cooked.head = 0;
+    tty->cooked.tail = 0;
+    tty->cooked.count = 0;
+    return 0;
+}
+
+int tty_getinfo(tty_t *tty, struct ttyinfo *info) {
+    if (!tty || !info) return -1;
+    info->rows = tty->max_rows;
+    info->cols = tty->max_cols;
+    return 0;
 }

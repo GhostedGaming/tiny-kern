@@ -93,6 +93,7 @@ struct tcb *create_thread(void *entry, struct pcb *p, void *ustack) {
     t->fpu_area = fpu;
     t->parent = p;
     t->state = Ready;
+    t->fs_base = 0;
 
     if (thread_list == NULL) {
         thread_list = t;
@@ -150,6 +151,7 @@ void destroy_thread(struct tcb *t) {
 
     p->t_count--;
 
+    print("DESTROY_THREAD tid=%d pid=%d\n", t->tid, p ? p->pid : -1);
     kfree(t->fpu_area);
     free_kernel_stack((void *)(t->kstack_top - KSTACK_SIZE));
     kfree(t);

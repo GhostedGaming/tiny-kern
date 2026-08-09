@@ -11,8 +11,6 @@
 #include <mm/mmap.h>
 
 #define MMAP_ADDR_MASK 0x000FFFFFFFFFF000ULL
-#define MMAP_ENOMEM    12
-#define MMAP_EINVAL    22
 
 static uintptr_t mmap_page_frame(uint64_t *pml4_phys, uintptr_t va) {
     uint64_t *pml4 = (uint64_t *)phys_to_virt((uintptr_t)pml4_phys);
@@ -34,9 +32,9 @@ static uintptr_t mmap_page_frame(uint64_t *pml4_phys, uintptr_t va) {
 intptr_t sys_mmap(uintptr_t addr, size_t len, int prot, int flags, int fd, off_t offset) {
     struct pcb *p = sched_current_proc();
     if (!p) return -1;
-    if (len == 0) return -MMAP_EINVAL;
-    if (!(flags & MAP_ANONYMOUS)) return -MMAP_EINVAL;
-    if (flags & MAP_FIXED) return -MMAP_EINVAL;
+    if (len == 0) return -EINVAL;
+    if (!(flags & MAP_ANONYMOUS)) return -EINVAL;
+    if (flags & MAP_FIXED) return -EINVAL;
 
     size_t pages = (len + PAGE_SIZE - 1) / PAGE_SIZE;
     size_t map_len = pages * PAGE_SIZE;
@@ -52,14 +50,14 @@ intptr_t sys_mmap(uintptr_t addr, size_t len, int prot, int flags, int fd, off_t
     if (prot & PROT_WRITE) f |= PAGE_WRITABLE;
 
     if (!vmm_map_region((uint64_t *)p->addr_space, (void *)va, f, (int)pages)) {
-        return -MMAP_ENOMEM;
+        return -ENOMEM;
     }
 
     memset((void *)va, 0, map_len);
 
     struct mmap_region *r = (struct mmap_region *)kmalloc(sizeof(struct mmap_region));
     if (!r) {
-        return -MMAP_ENOMEM;
+        return -ENOMEM;
     }
     r->base = va;
     r->len = map_len;
@@ -89,8 +87,8 @@ static struct mmap_region *find_region(struct pcb *p, uintptr_t addr, size_t len
 
 int sys_munmap(uintptr_t addr, size_t len) {
     struct pcb *p = sched_current_proc();
-    if (!p) return -MMAP_EINVAL;
-    if (len == 0) return -MMAP_EINVAL;
+    if (!p) return -EINVAL;
+    if (len == 0) return -EINVAL;
 
     uintptr_t start = addr & ~((uintptr_t)PAGE_SIZE - 1);
     size_t map_len = ((addr + len + PAGE_SIZE - 1) & ~((uintptr_t)PAGE_SIZE - 1)) - start;
@@ -110,19 +108,19 @@ int sys_munmap(uintptr_t addr, size_t len) {
         prev = r;
         r = r->next;
     }
-    return -MMAP_EINVAL;
+    return -EINVAL;
 }
 
 int sys_mprotect(uintptr_t addr, size_t len, int prot) {
     struct pcb *p = sched_current_proc();
-    if (!p) return -MMAP_EINVAL;
-    if (len == 0) return -MMAP_EINVAL;
+    if (!p) return -EINVAL;
+    if (len == 0) return -EINVAL;
 
     uintptr_t start = addr & ~((uintptr_t)PAGE_SIZE - 1);
     uintptr_t end = (addr + len + PAGE_SIZE - 1) & ~((uintptr_t)PAGE_SIZE - 1);
 
     struct mmap_region *r = find_region(p, start, end - start);
-    if (!r) return -MMAP_EINVAL;
+    if (!r) return -EINVAL;
 
     uint64_t f = PAGE_PRESENT | PAGE_USER;
     if (prot & PROT_WRITE) f |= PAGE_WRITABLE;

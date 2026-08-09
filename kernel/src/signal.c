@@ -1,11 +1,11 @@
 #include <stdint.h>
-#include <stddef.h>
 #include <multitasking/sched.h>
 #include <multitasking/proc.h>
 #include <multitasking/thread.h>
 #include <logging/print.h>
 #include <signal.h>
 #include <lib/errno.h>
+#include <abi/syscalls.h>
 
 #define USER_STACK_TOP 0x0000700000000000UL
 #define USTACK_SIZE 0x10000
@@ -146,7 +146,7 @@ static void sig_queue(struct pcb *p, int sig) {
 
 static void put_sigreturn_tramp(uint8_t *dst) {
     dst[0] = 0xBF;
-    dst[1] = SYS_RT_SIGRETURN;
+    dst[1] = SYS_SIGRETURN;
     dst[2] = 0;
     dst[3] = 0;
     dst[4] = 0;

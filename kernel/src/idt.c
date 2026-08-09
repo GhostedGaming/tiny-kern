@@ -7,7 +7,9 @@
 #include <idt.h>
 #include <signal.h>
 #include <multitasking/sched.h>
+#include <multitasking/thread.h>
 #include <multitasking/proc.h>
+#include <tty.h>
 
 #define IDT_MAX_DESCRIPTORS 256
 
@@ -119,6 +121,14 @@ void exception_handler(uint64_t vector, uint64_t error_code, user_context_t *ctx
         }
         if (sig) {
             struct pcb *p = sched_current_proc();
+            uint64_t cr2_v = 0;
+            asm volatile ("mov %%cr2, %0" : "=r"(cr2_v));
+            uint64_t msr_fs = 0;
+            asm volatile ("rdmsr" : "=a"(msr_fs), "=d"(msr_fs) : "c"(0xC0000100));
+            print("USERFAULT pid=%d vector=%lu rip=%lx rbx=%lx cr2=%lx fs_tcb=%lx fs_msr=%lx sig=%d\n",
+                  p ? p->pid : -1, (unsigned long)vector, (unsigned long)ctx->rip,
+                  (unsigned long)ctx->rbx, (unsigned long)cr2_v,
+                  (unsigned long)current_tcb->fs_base, (unsigned long)(msr_fs & 0xFFFFFFFFFFFFFFFF), sig);
             if (p) {
                 sigset_t bit = (sigset_t)1 << (sig - 1);
                 if (p->sigstate.blocked & bit) {
@@ -158,6 +168,43 @@ void exception_handler(uint64_t vector, uint64_t error_code, user_context_t *ctx
     print("CR4       : 0x%016lx\n", (unsigned long)cr4);
     print("RFLAGS    : 0x%016lx\n", (unsigned long)rflags);
     print("CS        : 0x%04lx\n",  (unsigned long)cs);
+
+    {
+        uint64_t pml4i = (cr2 >> 39) & 0x1FF;
+        uint64_t pdpti = (cr2 >> 30) & 0x1FF;
+        uint64_t pdi = (cr2 >> 21) & 0x1FF;
+        uint64_t pti = (cr2 >> 12) & 0x1FF;
+        uint64_t *pml4 = (uint64_t *)(cr3 + 0xffff800000000000ULL);
+        uint64_t pml4e = pml4[pml4i];
+        uint64_t *pdpt = (uint64_t *)((pml4e & 0x000FFFFFFFFFF000ULL) + 0xffff800000000000ULL);
+        uint64_t pdpte = pml4e & 1 ? pdpt[pdpti] : 0;
+        uint64_t *pd = (uint64_t *)((pdpte & 0x000FFFFFFFFFF000ULL) + 0xffff800000000000ULL);
+        uint64_t pde = pdpte & 1 ? pd[pdi] : 0;
+        uint64_t *pt = (uint64_t *)((pde & 0x000FFFFFFFFFF000ULL) + 0xffff800000000000ULL);
+        uint64_t pte = pde & 1 ? pt[pti] : 0;
+        print("PAGEWALK i4=%lu[%lx] i3=%lu[%lx] i2=%lu[%lx] i1=%lu[%lx]\n",
+              (unsigned long)pml4i, (unsigned long)pml4e,
+              (unsigned long)pdpti, (unsigned long)pdpte,
+              (unsigned long)pdi, (unsigned long)pde,
+              (unsigned long)pti, (unsigned long)pte);
+        extern volatile struct limine_framebuffer_request framebuffer_request;
+        if (framebuffer_request.response && framebuffer_request.response->framebuffer_count > 0) {
+            print("FBSTATE resp=%lx addr=%lx pitch=%u width=%u height=%u\n",
+                  (unsigned long)framebuffer_request.response,
+                  (unsigned long)framebuffer_request.response->framebuffers[0]->address,
+                  (unsigned)framebuffer_request.response->framebuffers[0]->pitch,
+                  (unsigned)framebuffer_request.response->framebuffers[0]->width,
+                  (unsigned)framebuffer_request.response->framebuffers[0]->height);
+        }
+        extern tty_t *tty_get_active();
+        tty_t *atty = tty_get_active();
+        if (atty) {
+            print("TTYSTATE row=%u col=%u max_rows=%u max_cols=%u origin_y=%u origin_x=%u\n",
+                  (unsigned)atty->row, (unsigned)atty->col,
+                  (unsigned)atty->max_rows, (unsigned)atty->max_cols,
+                  (unsigned)atty->origin_y, (unsigned)atty->origin_x);
+        }
+    }
     print("SS        : 0x%04lx\n",  (unsigned long)ss);
     print("----------------------------------------------------------------\n");
     print("System halted.\n");

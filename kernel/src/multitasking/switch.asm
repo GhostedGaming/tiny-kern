@@ -18,6 +18,7 @@ struc tcb
     .parent:      resq 1
     .fpu_area:    resq 1
     .state:       resb 1
+    .fs_base:     resq 1
 endstruc
 
 switch_task:
@@ -71,6 +72,11 @@ switch_task:
     mov cr3, rax
 
 .same_cr3:
+    mov rcx, 0xC0000100
+    mov rax, [rdi + tcb.fs_base]
+    mov edx, [rdi + tcb.fs_base + 4]
+    wrmsr
+
     pop r15
     pop r14
     pop r13
@@ -90,24 +96,27 @@ switch_task:
     ret
 
 fork_child_restore:
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rsi
-    pop rdi
+    mov rcx, 0xC0000100
+    push rax
+    push rdx
+    mov rdx, [rel current_tcb]
+    mov rax, [rdx + tcb.fs_base]
+    mov edx, [rdx + tcb.fs_base + 4]
+    wrmsr
     pop rdx
-    pop rcx
-    pop rbx
-    xor eax, eax
+    pop rax
+
     iretq
 
 exec_switch_resume:
     mov rsp, rdi
+    mov rax, [rel current_tcb]
+    mov rcx, 0xC0000100
+    mov rdx, rax
+    mov rax, [rdx + tcb.fs_base]
+    mov edx, [rdx + tcb.fs_base + 4]
+    wrmsr
+
     pop r15
     pop r14
     pop r13

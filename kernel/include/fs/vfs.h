@@ -3,6 +3,13 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <abi/types.h>
+#include <abi/errno.h>
+#include <abi/fcntl.h>
+#include <abi/seek.h>
+#include <abi/mmap.h>
+#include <abi/time.h>
+
 typedef long ssize_t;
 typedef long off_t;
 
@@ -13,54 +20,12 @@ typedef long off_t;
 #define VFS_ERR_ALREADY_MOUNTED 4
 #define VFS_ERR_FS_INIT 5
 
-#define EPERM 1
-#define ENOENT 2
-#define EBADF 9
-#define EAGAIN 11
-#define EACCES 13
-#define EEXIST 17
-#define ENOTDIR 20
-#define EISDIR 21
-#define EINVAL 22
-#define ENFILE 23
-#define EMFILE 24
-#define ENOSPC 28
-#define EROFS 30
-#define EPIPE 32
-#define ENAMETOOLONG 36
-#define ENOTEMPTY 39
-
 #define VFS_NODE_FILE 0
 #define VFS_NODE_DIR 1
 #define VFS_NODE_DEV 2
 #define VFS_NODE_MOUNTPOINT 3
 #define VFS_NODE_SYMLINK 4
 #define VFS_NODE_PIPE 5
-
-#define O_ACCMODE 0x0003
-#define O_RDONLY 0x0000
-#define O_WRONLY 0x0001
-#define O_RDWR 0x0002
-#define O_CREAT 0x0040
-#define O_TRUNC 0x0200
-#define O_APPEND 0x0400
-#define O_DIRECTORY 0x4000
-#define O_EXCL 0x0800
-
-#define F_OK 0
-#define X_OK 1
-#define W_OK 2
-#define R_OK 4
-
-#define SEEK_SET 0
-#define SEEK_CUR 1
-#define SEEK_END 2
-
-#define S_IFREG 0100000
-#define S_IFDIR 0040000
-#define S_IFCHR 0020000
-#define S_IFLNK 0120000
-#define S_IFMT 0170000
 
 #define STDIN_FILENO 0
 #define STDOUT_FILENO 1
@@ -81,69 +46,6 @@ typedef long off_t;
 #define VFS_STDIN       STDIN_FILENO
 #define VFS_STDOUT      STDOUT_FILENO
 #define VFS_STDERR      STDERR_FILENO
-
-struct timespec {
-    int64_t tv_sec;
-    int64_t tv_nsec;
-};
-
-/* Linux x86_64 userspace-visible struct stat (musl ABI, 144 bytes). */
-struct stat {
-    uint64_t st_dev;
-    uint64_t st_ino;
-    uint64_t st_nlink;
-    uint32_t st_mode;
-    uint32_t st_uid;
-    uint32_t st_gid;
-    int32_t  __pad0;
-    uint64_t st_rdev;
-    int64_t  st_size;
-    int64_t  st_blksize;
-    int64_t  st_blocks;
-    struct timespec st_atim;
-    struct timespec st_mtim;
-    struct timespec st_ctim;
-    int64_t  __unused[3];
-};
-
-/* Linux getdents64 entry layout. */
-struct linux_dirent64 {
-    uint64_t d_ino;
-    int64_t  d_off;
-    uint16_t d_reclen;
-    uint8_t  d_type;
-    char     d_name[];
-};
-
-struct utsname {
-    char sysname[65];
-    char nodename[65];
-    char release[65];
-    char version[65];
-    char machine[65];
-    char domainname[65];
-};
-
-struct iovec {
-    void *iov_base;
-    size_t iov_len;
-};
-
-#define AT_FDCWD -100
-#define AT_SYMLINK_NOFOLLOW 0x100
-
-#define PROT_READ  0x1
-#define PROT_WRITE 0x2
-#define PROT_EXEC  0x4
-#define PROT_NONE  0x0
-
-#define MAP_SHARED    0x01
-#define MAP_PRIVATE   0x02
-#define MAP_FIXED     0x10
-#define MAP_ANONYMOUS 0x20
-
-#define CLOCK_REALTIME  0
-#define CLOCK_MONOTONIC 1
 
 extern int errno;
 
