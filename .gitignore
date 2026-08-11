@@ -1,4 +1,4 @@
-/limine-binary
+/bootloader/limine-binary
 /edk2-ovmf-bins
 /sysroot
 /.cache

@@ -177,16 +177,15 @@ test_programs: mlibc
 edk2-ovmf-bins:
 	curl -L https://github.com/osdev0/edk2-ovmf-stable-bins/releases/latest/download/edk2-ovmf-bins.tar.gz | gunzip | tar -xf -
 
-limine-binary/limine:
-	rm -rf limine-binary
+bootloader/limine-binary/limine:
+	rm -rf bootloader/limine-binary
 	curl -L https://github.com/Limine-Bootloader/Limine/releases/latest/download/limine-binary.tar.gz | gunzip | tar -xf -
-	$(MAKE) -C limine-binary \
+	$(MAKE) -C bootloader/limine-binary \
 		CC="$(HOST_CC)" \
 		CFLAGS="$(HOST_CFLAGS)" \
 		CPPFLAGS="$(HOST_CPPFLAGS)" \
 		LDFLAGS="$(HOST_LDFLAGS)" \
 		LIBS="$(HOST_LIBS)"
-
 kernel/.deps-obtained:
 	@set -e; \
 	clone_repo_commit() { \
@@ -253,28 +252,28 @@ test_programs.tar: test_programs/GNUmakefile $(wildcard test_programs/*.c test_p
 	$(MAKE) -C test_programs
 	tar --format=ustar -C test_programs -cf $@ .
 
-$(IMAGE_NAME).iso: limine-binary/limine kernel test_programs.tar
+$(IMAGE_NAME).iso: bootloader/limine-binary/limine kernel test_programs.tar
 	rm -rf iso_root
 	mkdir -p iso_root/boot
 	cp -v kernel/bin-$(ARCH)/kernel iso_root/boot/
 	cp -v test_programs.tar iso_root/
 	mkdir -p iso_root/boot/limine
-	cp -v limine.conf iso_root/boot/limine/
+	cp -v bootloader/limine.conf iso_root/boot/limine/
 	mkdir -p iso_root/EFI/BOOT
 ifeq ($(ARCH),x86_64)
-	cp -v limine-binary/limine-bios.sys limine-binary/limine-bios-cd.bin limine-binary/limine-uefi-cd.bin iso_root/boot/limine/
-	cp -v limine-binary/BOOTX64.EFI iso_root/EFI/BOOT/
-	cp -v limine-binary/BOOTIA32.EFI iso_root/EFI/BOOT/
+	cp -v bootloader/limine-binary/limine-bios.sys bootloader/limine-binary/limine-bios-cd.bin bootloader/limine-binary/limine-uefi-cd.bin iso_root/boot/limine/
+	cp -v bootloader/limine-binary/BOOTX64.EFI iso_root/EFI/BOOT/
+	cp -v bootloader/limine-binary/BOOTIA32.EFI iso_root/EFI/BOOT/
 	xorriso -as mkisofs -R -r -b boot/limine/limine-bios-cd.bin \
 		-no-emul-boot -boot-load-size 4 -boot-info-table -hfsplus \
 		-apm-block-size 2048 --efi-boot boot/limine/limine-uefi-cd.bin \
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		iso_root -o $(IMAGE_NAME).iso
-	./limine-binary/limine bios-install $(IMAGE_NAME).iso
+	./bootloader/limine-binary/limine bios-install $(IMAGE_NAME).iso
 endif
 ifeq ($(ARCH),aarch64)
-	cp -v limine-binary/limine-uefi-cd.bin iso_root/boot/limine/
-	cp -v limine-binary/BOOTAA64.EFI iso_root/EFI/BOOT/
+	cp -v bootloader/limine-binary/limine-uefi-cd.bin iso_root/boot/limine/
+	cp -v bootloader/limine-binary/BOOTAA64.EFI iso_root/EFI/BOOT/
 	xorriso -as mkisofs -R -r -J \
 		-hfsplus -apm-block-size 2048 \
 		--efi-boot boot/limine/limine-uefi-cd.bin \
@@ -282,8 +281,8 @@ ifeq ($(ARCH),aarch64)
 		iso_root -o $(IMAGE_NAME).iso
 endif
 ifeq ($(ARCH),riscv64)
-	cp -v limine-binary/limine-uefi-cd.bin iso_root/boot/limine/
-	cp -v limine-binary/BOOTRISCV64.EFI iso_root/EFI/BOOT/
+	cp -v bootloader/limine-binary/limine-uefi-cd.bin iso_root/boot/limine/
+	cp -v bootloader/limine-binary/BOOTRISCV64.EFI iso_root/EFI/BOOT/
 	xorriso -as mkisofs -R -r -J \
 		-hfsplus -apm-block-size 2048 \
 		--efi-boot boot/limine/limine-uefi-cd.bin \
@@ -291,8 +290,8 @@ ifeq ($(ARCH),riscv64)
 		iso_root -o $(IMAGE_NAME).iso
 endif
 ifeq ($(ARCH),loongarch64)
-	cp -v limine-binary/limine-uefi-cd.bin iso_root/boot/limine/
-	cp -v limine-binary/BOOTLOONGARCH64.EFI iso_root/EFI/BOOT/
+	cp -v bootloader/limine-binary/limine-uefi-cd.bin iso_root/boot/limine/
+	cp -v bootloader/limine-binary/BOOTLOONGARCH64.EFI iso_root/EFI/BOOT/
 	xorriso -as mkisofs -R -r -J \
 		-hfsplus -apm-block-size 2048 \
 		--efi-boot boot/limine/limine-uefi-cd.bin \
@@ -301,32 +300,32 @@ ifeq ($(ARCH),loongarch64)
 endif
 	rm -rf iso_root
 
-$(IMAGE_NAME).hdd: limine-binary/limine kernel
+$(IMAGE_NAME).hdd: bootloader/limine-binary/limine kernel
 	rm -f $(IMAGE_NAME).hdd
 	dd if=/dev/zero bs=1M count=0 seek=64 of=$(IMAGE_NAME).hdd
 ifeq ($(ARCH),x86_64)
 	PATH=$$PATH:/usr/sbin:/sbin sgdisk $(IMAGE_NAME).hdd -n 1:2048 -t 1:ef00 -m 1
-	./limine-binary/limine bios-install $(IMAGE_NAME).hdd
+	./bootloader/limine-binary/limine bios-install $(IMAGE_NAME).hdd
 else
 	PATH=$$PATH:/usr/sbin:/sbin sgdisk $(IMAGE_NAME).hdd -n 1:2048 -t 1:ef00
 endif
 	mformat -i $(IMAGE_NAME).hdd@@1M
 	mmd -i $(IMAGE_NAME).hdd@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine
 	mcopy -i $(IMAGE_NAME).hdd@@1M kernel/bin-$(ARCH)/kernel ::/boot
-	mcopy -i $(IMAGE_NAME).hdd@@1M limine.conf ::/boot/limine
+	mcopy -i $(IMAGE_NAME).hdd@@1M bootloader/limine.conf ::/boot/limine
 ifeq ($(ARCH),x86_64)
-	mcopy -i $(IMAGE_NAME).hdd@@1M limine-binary/limine-bios.sys ::/boot/limine
-	mcopy -i $(IMAGE_NAME).hdd@@1M limine-binary/BOOTX64.EFI ::/EFI/BOOT
-	mcopy -i $(IMAGE_NAME).hdd@@1M limine-binary/BOOTIA32.EFI ::/EFI/BOOT
+	mcopy -i $(IMAGE_NAME).hdd@@1M bootloader/limine-binary/limine-bios.sys ::/boot/limine
+	mcopy -i $(IMAGE_NAME).hdd@@1M bootloader/limine-binary/BOOTX64.EFI ::/EFI/BOOT
+	mcopy -i $(IMAGE_NAME).hdd@@1M bootloader/limine-binary/BOOTIA32.EFI ::/EFI/BOOT
 endif
 ifeq ($(ARCH),aarch64)
-	mcopy -i $(IMAGE_NAME).hdd@@1M limine-binary/BOOTAA64.EFI ::/EFI/BOOT
+	mcopy -i $(IMAGE_NAME).hdd@@1M bootloader/limine-binary/BOOTAA64.EFI ::/EFI/BOOT
 endif
 ifeq ($(ARCH),riscv64)
-	mcopy -i $(IMAGE_NAME).hdd@@1M limine-binary/BOOTRISCV64.EFI ::/EFI/BOOT
+	mcopy -i $(IMAGE_NAME).hdd@@1M bootloader/limine-binary/BOOTRISCV64.EFI ::/EFI/BOOT
 endif
 ifeq ($(ARCH),loongarch64)
-	mcopy -i $(IMAGE_NAME).hdd@@1M limine-binary/BOOTLOONGARCH64.EFI ::/EFI/BOOT
+	mcopy -i $(IMAGE_NAME).hdd@@1M bootloader/limine-binary/BOOTLOONGARCH64.EFI ::/EFI/BOOT
 endif
 
 .PHONY: clean
@@ -337,4 +336,4 @@ clean:
 .PHONY: distclean
 distclean:
 	$(MAKE) -C kernel distclean
-	rm -rf iso_root *.iso *.hdd limine-binary edk2-ovmf-bins
+	rm -rf iso_root *.iso *.hdd bootloader/limine-binary edk2-ovmf-bins
