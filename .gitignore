@@ -4,7 +4,7 @@
 /.cache
 /tools/build-*
 /tools/cross
-/test_programs/bins
+/userspace/bin
 *.iso
 *.hdd
 *.img

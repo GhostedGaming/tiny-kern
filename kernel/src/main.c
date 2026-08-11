@@ -69,9 +69,9 @@ static void init_thread_entry() {
 }
 
 static void run_init() {
-    int fd = open("/ram/bins/init", O_RDONLY);
+    int fd = open("/ram/bin/init", O_RDONLY);
     if (fd < 0) {
-        print("open(/ram/bins/init) failed errno=%d\n", errno);
+        print("open(/ram/bin/init) failed errno=%d\n", errno);
         return;
     }
 
@@ -95,7 +95,7 @@ static void run_init() {
     uint64_t rsp = 0;
 
     reload_cr3(p->addr_space);
-    if (setup_user_stack(p->addr_space, init_argv, init_envp, "/ram/bins/init",
+    if (setup_user_stack(p->addr_space, init_argv, init_envp, "/ram/bin/init",
                          &info, &rsp)) {
         print("setup_user_stack failed\n");
         return;
@@ -103,7 +103,7 @@ static void run_init() {
 
     g_init_entry = entry;
     g_init_rsp = rsp;
-    print("loaded /ram/bins/init entry=0x%lX pid=%lu\n", entry, p->pid);
+    print("loaded /ram/bin/init entry=0x%lX pid=%lu\n", entry, p->pid);
 
     schedule();
     print("scheduler returned\n");

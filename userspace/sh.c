@@ -93,7 +93,7 @@ static int parse_line(char *line, char **argv) {
 
 static void run_external(char **argv, int bg) {
     char path[256];
-    snprintf(path, sizeof(path), "/ram/bins/%s", argv[0]);
+    snprintf(path, sizeof(path), "/ram/bin/%s", argv[0]);
 
     pid_t pid = fork();
     if (pid == 0) {

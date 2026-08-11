@@ -169,10 +169,10 @@ mlibc:
 	
 	cd mlibc && DESTDIR=$$(pwd)/build/install ninja -C build install
 
-.PHONY: test_programs
-test_programs: mlibc
-	$(MAKE) -C test_programs clean
-	$(MAKE) -C test_programs
+.PHONY: userspace
+userspace: mlibc
+	$(MAKE) -C userspace clean
+	$(MAKE) -C userspace
 
 edk2-ovmf-bins:
 	curl -L https://github.com/osdev0/edk2-ovmf-stable-bins/releases/latest/download/edk2-ovmf-bins.tar.gz | gunzip | tar -xf -
@@ -248,15 +248,15 @@ clone:
 kernel: kernel/.deps-obtained
 	$(MAKE) -C kernel
 
-test_programs.tar: test_programs/GNUmakefile $(wildcard test_programs/*.c test_programs/*.ld test_programs/usr/src/*.c) tools/tcc-0.9.27/tcc tools/tcc-0.9.27/libtcc1.a
-	$(MAKE) -C test_programs
-	tar --format=ustar -C test_programs -cf $@ .
+userspace.tar: userspace/GNUmakefile $(wildcard userspace/*.c userspace/*.ld userspace/usr/src/*.c) tools/tcc-0.9.27/tcc tools/tcc-0.9.27/libtcc1.a
+	$(MAKE) -C userspace
+	tar --format=ustar -C userspace -cf $@ .
 
-$(IMAGE_NAME).iso: bootloader/limine-binary/limine kernel test_programs.tar
+$(IMAGE_NAME).iso: bootloader/limine-binary/limine kernel userspace.tar
 	rm -rf iso_root
 	mkdir -p iso_root/boot
 	cp -v kernel/bin-$(ARCH)/kernel iso_root/boot/
-	cp -v test_programs.tar iso_root/
+	cp -v userspace.tar iso_root/
 	mkdir -p iso_root/boot/limine
 	cp -v bootloader/limine.conf iso_root/boot/limine/
 	mkdir -p iso_root/EFI/BOOT

@@ -23,25 +23,25 @@ int main(void) {
     printf("all_test: start\n");
 
     struct stat st;
-    if (stat("/ram/bins/init", &st) == 0) {
+    if (stat("/ram/bin/init", &st) == 0) {
         check("stat", (st.st_mode & S_IFMT) == S_IFREG && st.st_size > 0);
     } else {
         check("stat", 0);
     }
 
-    if (lstat("/ram/bins", &st) == 0) {
+    if (lstat("/ram/bin", &st) == 0) {
         check("lstat dir", (st.st_mode & S_IFMT) == S_IFDIR);
     } else {
         check("lstat dir", 0);
     }
 
-    if (fstatat(AT_FDCWD, "/ram/bins/init", &st, 0) == 0) {
+    if (fstatat(AT_FDCWD, "/ram/bin/init", &st, 0) == 0) {
         check("fstatat", 1);
     } else {
         check("fstatat", 0);
     }
 
-    int fd = open("/ram/bins/init", O_RDONLY);
+    int fd = open("/ram/bin/init", O_RDONLY);
     if (fd < 0) {
         check("open", 0);
     } else {
@@ -72,7 +72,7 @@ int main(void) {
     ssize_t wn = writev(1, wv, 2);
     check("writev", wn == (ssize_t)(strlen(part1) + strlen(part2)));
 
-    fd = open("/ram/bins", O_RDONLY);
+    fd = open("/ram/bin", O_RDONLY);
     if (fd < 0) {
         check("open dir", 0);
     } else {

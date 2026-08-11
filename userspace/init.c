@@ -69,7 +69,7 @@ int main(int argc, char *argv[]) {
         report("malloc/free", 0);
     }
 
-    DIR *d = opendir("/ram/bins");
+    DIR *d = opendir("/ram/bin");
     if (d) {
         int seen = 0;
         struct dirent *ent;
@@ -85,7 +85,7 @@ int main(int argc, char *argv[]) {
         report("opendir/readdir", 0);
     }
 
-    int fd = open("/ram/bins/syscall_test", O_RDONLY);
+    int fd = open("/ram/bin/syscall_test", O_RDONLY);
     if (fd >= 0) {
         struct stat st;
         report("open/fstat", fstat(fd, &st) == 0 && st.st_size > 0);
@@ -94,12 +94,14 @@ int main(int argc, char *argv[]) {
         report("open/fstat", 0);
     }
 
-    spawn("/ram/bins/user_idle", "user_idle");
-    spawn("/ram/bins/sig_test", "sig_test");
-    spawn("/ram/bins/syscall_test", "syscall_test");
-    spawn("/ram/bins/all_test", "all_test");
+    spawn("/ram/bin/user_idle", "user_idle");
+    spawn("/ram/bin/sig_test", "sig_test");
+    spawn("/ram/bin/syscall_test", "syscall_test");
+    spawn("/ram/bin/all_test", "all_test");
 
-    spawn("/ram/bins/sh", "sh");
+    spawn("/ram/bin/sh", "sh");
+
+    spawn("/ram/bin/tcc_link", "tcc_link");
 
     printf("init: reaping children\n");
     for (;;) {

@@ -17,7 +17,7 @@ CRTEND   := $(shell $(CC) -print-file-name=crtend.o)
 LDFLAGS := -nostdlib -static -z max-page-size=0x1000 -z noexecstack
 
 LDSCRIPT := linker.ld
-BINDIR   := bins
+BINDIR   := bin
 
 LIBS := $(MLIBC_LIB)/libc.a $(MLIBC_LIB)/libssp_nonshared.a $(MLIBC_LIB)/libssp.a \
 $(MLIBC_LIB)/libpthread.a $(MLIBC_LIB)/libm.a $(MLIBC_LIB)/libutil.a
@@ -44,10 +44,10 @@ $(BINDIR)/%: %.c $(LDSCRIPT) $(LIBS) $(MLIBC_LIB)/crt1.o
 clean:
 	rm -rf $(BINDIR) usr
 
-bins/tcc: $(TCCSRC)/tcc
+bin/tcc: $(TCCSRC)/tcc
 	cp $< $@
 
-usr: bins/tcc
+usr: bin/tcc
 	@mkdir -p usr/bin usr/lib usr/lib/tcc usr/include usr/src
 	cp $(TCCSRC)/tcc usr/bin/tcc
 	cp $(TCCSRC)/libtcc1.a usr/lib/tcc/
