@@ -187,6 +187,8 @@ void sig_deliver(struct pcb *p, int sig, user_context_t *ctx) {
     fr->info.si_errno = 0;
     fr->info.si_pid = (int)p->pid;
     fr->info.si_addr = ctx->rip;
+    fr->sa_flags = p->sigstate.actions[sig].sa_flags;
+    fr->saved_syscall = 0;
 
     if (!(p->sigstate.actions[sig].sa_flags & SA_NODEFER)) {
         p->sigstate.blocked |= (sigset_t)1 << (sig - 1);
@@ -201,6 +203,13 @@ void sig_deliver(struct pcb *p, int sig, user_context_t *ctx) {
     uintptr_t tramp = (uintptr_t)base - 16;
     *(uint64_t *)(base - 8) = tramp;
     put_sigreturn_tramp((uint8_t *)tramp);
+
+    if (fr->sa_flags & SA_RESTART) {
+        uint8_t *inst = (uint8_t *)ctx->rip;
+        if (inst[0] == 0xCD && inst[1] == 0x80) {
+            ctx->rip -= 2;
+        }
+    }
 
     ctx->rsp = (uint64_t)(base - 8);
     ctx->rip = (uint64_t)h;

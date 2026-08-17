@@ -28,6 +28,8 @@ typedef struct sigframe {
     user_context_t ctx;
     sigset_t old_mask;
     siginfo_t info;
+    uint64_t saved_syscall;
+    uint64_t sa_flags;
 } sigframe_t;
 
 typedef void (*sig_handler_t)(int);
