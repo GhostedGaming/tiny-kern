@@ -69,6 +69,7 @@ struct tty {
     uint32_t  *backbuf;
     uint32_t  *render_target;
     int        backbuf_mode;
+    uint64_t   fg_pid;
 };
 
 struct termios_user {

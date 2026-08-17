@@ -524,6 +524,9 @@ int32_t tty_write(tty_t *tty, const uint8_t *buf, uint32_t count) {
 int32_t tty_read(tty_t *tty, uint8_t *buf, uint32_t count) {
     if (!tty || !buf || count == 0) return -1;
 
+    if (current_tcb && current_tcb->parent)
+        tty->fg_pid = current_tcb->parent->pid;
+
     while (tty->cooked.count == 0) {
         if (!current_tcb)
             return 0;
@@ -624,6 +627,7 @@ void tty_init(void (*output_fn)(tty_t *tty, char c)) {
         t->backbuf      = backbuf_storage;
         t->render_target = (uint32_t *)fb->address;
         t->backbuf_mode = 0;
+        t->fg_pid = 0;
 
         char name[8];
         name[0] = 't'; name[1] = 't'; name[2] = 'y';
