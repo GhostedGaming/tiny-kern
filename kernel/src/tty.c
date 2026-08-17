@@ -300,6 +300,17 @@ static void tty_esc_reset(tty_t *tty) {
     tty->esc_param[3] = 0;
 }
 
+static const uint32_t ansi_colors[8] = {
+    0x00000000, /* 0: black   */
+    0x00AA0000, /* 1: red     */
+    0x0000AA00, /* 2: green   */
+    0x00AA5500, /* 3: yellow  */
+    0x000000AA, /* 4: blue    */
+    0x00AA00AA, /* 5: magenta */
+    0x0000AAAA, /* 6: cyan    */
+    0x00AAAAAA, /* 7: white   */
+};
+
 static void tty_esc_finish(tty_t *tty, char c) {
     switch (c) {
         case 'A': tty_move_cursor(tty, -(int)tty_esc_param(tty, 0), 0); break;
@@ -341,13 +352,31 @@ static void tty_esc_finish(tty_t *tty, char c) {
             break;
         }
         case 'm': {
-            int n = tty->esc_nparam ? (int)tty->esc_param[0] : 0;
-            if (n == 7) {
-                tty->fg = 0x00000000;
-                tty->bg = 0xFFFFFFFF;
-            } else if (n == 0) {
+            if (tty->esc_nparam == 0) {
+                /* ESC[m = ESC[0m = reset */
                 tty->fg = 0xFFFFFFFF;
                 tty->bg = 0x00000000;
+                break;
+            }
+            for (int i = 0; i <= tty->esc_nparam; i++) {
+                int n = tty->esc_param[i];
+                if (n == 0) {
+                    tty->fg = 0xFFFFFFFF;
+                    tty->bg = 0x00000000;
+                } else if (n == 7) {
+                    /* reverse video */
+                    uint32_t tmp = tty->fg;
+                    tty->fg = tty->bg;
+                    tty->bg = tmp;
+                } else if (n >= 30 && n <= 37) {
+                    tty->fg = ansi_colors[n - 30];
+                } else if (n >= 40 && n <= 47) {
+                    tty->bg = ansi_colors[n - 40];
+                } else if (n >= 90 && n <= 97) {
+                    tty->fg = ansi_colors[n - 90]; /* bright fg */
+                } else if (n >= 100 && n <= 107) {
+                    tty->bg = ansi_colors[n - 100]; /* bright bg */
+                }
             }
             break;
         }
