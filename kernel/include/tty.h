@@ -19,7 +19,8 @@
 #define VEOF    4
 #define VMIN    5
 #define VTIME   6
-#define NCCS    8
+#define VSUSP   10
+#define NCCS    11
 
 typedef struct {
     uint32_t c_iflag;

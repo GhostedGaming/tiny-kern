@@ -108,7 +108,7 @@ void default_sig_handler(int sig) {
     }
 }
 
-static void sig_queue(struct pcb *p, int sig) {
+void sig_queue(struct pcb *p, int sig) {
     if (!p || sig <= 0 || sig >= NSIG) {
         return;
     }

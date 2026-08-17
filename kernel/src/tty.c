@@ -9,6 +9,7 @@
 #include <tty.h>
 #include <logging/print.h>
 #include <multitasking/sched.h>
+#include <multitasking/proc.h>
 #include <multitasking/thread.h>
 
 #define GLYPH_W 8
@@ -472,6 +473,36 @@ static void tty_putchar_raw(tty_t *tty, char c) {
 void tty_input(tty_t *tty, char c) {
     if (tty->termios.c_iflag & ICRNL && c == '\r')
         c = '\n';
+
+    if (tty->termios.c_lflag & ISIG) {
+        if (c == tty->termios.c_cc[VINTR]) {
+            if (tty->fg_pid) {
+                struct pcb *target = proc_find(tty->fg_pid);
+                if (target) sig_queue(target, SIGINT);
+            }
+            if (tty->termios.c_lflag & ECHO)
+                tty_putchar_raw(tty, '\n');
+            return;
+        }
+        if (c == tty->termios.c_cc[VQUIT]) {
+            if (tty->fg_pid) {
+                struct pcb *target = proc_find(tty->fg_pid);
+                if (target) sig_queue(target, SIGQUIT);
+            }
+            if (tty->termios.c_lflag & ECHO)
+                tty_putchar_raw(tty, '\n');
+            return;
+        }
+        if (c == tty->termios.c_cc[VSUSP]) {
+            if (tty->fg_pid) {
+                struct pcb *target = proc_find(tty->fg_pid);
+                if (target) sig_queue(target, SIGTSTP);
+            }
+            if (tty->termios.c_lflag & ECHO)
+                tty_putchar_raw(tty, '\n');
+            return;
+        }
+    }
 
     if (tty->termios.c_lflag & ICANON) {
         if (c == tty->termios.c_cc[VERASE]) {
