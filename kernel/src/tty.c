@@ -352,19 +352,12 @@ static void tty_esc_finish(tty_t *tty, char c) {
             break;
         }
         case 'm': {
-            if (tty->esc_nparam == 0) {
-                /* ESC[m = ESC[0m = reset */
-                tty->fg = 0xFFFFFFFF;
-                tty->bg = 0x00000000;
-                break;
-            }
             for (int i = 0; i <= tty->esc_nparam; i++) {
                 int n = tty->esc_param[i];
                 if (n == 0) {
                     tty->fg = 0xFFFFFFFF;
                     tty->bg = 0x00000000;
                 } else if (n == 7) {
-                    /* reverse video */
                     uint32_t tmp = tty->fg;
                     tty->fg = tty->bg;
                     tty->bg = tmp;
@@ -373,9 +366,9 @@ static void tty_esc_finish(tty_t *tty, char c) {
                 } else if (n >= 40 && n <= 47) {
                     tty->bg = ansi_colors[n - 40];
                 } else if (n >= 90 && n <= 97) {
-                    tty->fg = ansi_colors[n - 90]; /* bright fg */
+                    tty->fg = ansi_colors[n - 90];
                 } else if (n >= 100 && n <= 107) {
-                    tty->bg = ansi_colors[n - 100]; /* bright bg */
+                    tty->bg = ansi_colors[n - 100];
                 }
             }
             break;
