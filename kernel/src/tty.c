@@ -24,6 +24,15 @@ static void  (*global_output_fn)(tty_t *tty, char c) = NULL;
 static uint32_t *backbuf_storage = NULL;
 static uint32_t  backbuf_size = 0;
 
+static uint32_t *tty_fb(tty_t *tty) {
+    return tty->render_target ? tty->render_target :
+           (uint32_t *)framebuffer_request.response->framebuffers[0]->address;
+}
+
+static uint32_t tty_fb_stride(void) {
+    return framebuffer_request.response->framebuffers[0]->pitch / 4;
+}
+
 static uint8_t tty_font[128][8] = {
     ['!'] = { 0x18, 0x3C, 0x3C, 0x18, 0x18, 0x00, 0x18, 0x00 },
     ['"'] = { 0x66, 0x66, 0x24, 0x00, 0x00, 0x00, 0x00, 0x00 },
@@ -125,8 +134,8 @@ static void tty_new_line(tty_t *tty) {
     tty->col = 0;
 
     if (tty->row + 1 >= tty->max_rows) {
-        uint32_t stride = framebuffer_request.response->framebuffers[0]->pitch / 4;
-        uint32_t *fb = framebuffer_request.response->framebuffers[0]->address;
+        uint32_t stride = tty_fb_stride();
+        uint32_t *fb = tty_fb(tty);
         uint32_t row_bytes = stride * GLYPH_H;
 
         uint32_t *dst = &fb[tty->origin_y * stride];
@@ -153,8 +162,8 @@ static void tty_scroll_if_needed(tty_t *tty) {
 void putchar(tty_t *tty, char c) {
     if (c == ' ') {
         tty_scroll_if_needed(tty);
-        uint32_t stride = framebuffer_request.response->framebuffers[0]->pitch / 4;
-        uint32_t *fb = framebuffer_request.response->framebuffers[0]->address;
+        uint32_t stride = tty_fb_stride();
+        uint32_t *fb = tty_fb(tty);
         uint16_t cell_w = GLYPH_W + LETTER_SPACING_PX;
         uint32_t origin_x = tty->origin_x + (tty->col * cell_w);
         uint32_t origin_y = tty->origin_y + (tty->row * GLYPH_H);
@@ -193,8 +202,8 @@ void putchar(tty_t *tty, char c) {
 
     tty_scroll_if_needed(tty);
 
-    uint32_t stride = framebuffer_request.response->framebuffers[0]->pitch / 4;
-    uint32_t *fb = framebuffer_request.response->framebuffers[0]->address;
+    uint32_t stride = tty_fb_stride();
+    uint32_t *fb = tty_fb(tty);
     uint16_t cell_w = GLYPH_W + LETTER_SPACING_PX;
     uint32_t origin_x = tty->origin_x + (tty->col * cell_w);
     uint32_t origin_y = tty->origin_y + (tty->row * GLYPH_H);
@@ -218,8 +227,8 @@ void putchar(tty_t *tty, char c) {
 static void tty_fill_cell(tty_t *tty, uint32_t row, uint32_t col, uint32_t color) {
     if (row >= tty->max_rows || col >= tty->max_cols) return;
 
-    uint32_t stride = framebuffer_request.response->framebuffers[0]->pitch / 4;
-    uint32_t *fb = framebuffer_request.response->framebuffers[0]->address;
+    uint32_t stride = tty_fb_stride();
+    uint32_t *fb = tty_fb(tty);
     uint16_t cell_w = GLYPH_W + LETTER_SPACING_PX;
     uint32_t origin_x = tty->origin_x + (col * cell_w);
     uint32_t origin_y = tty->origin_y + (row * GLYPH_H);
@@ -246,6 +255,13 @@ static void tty_clear_line(tty_t *tty, int from, int to) {
     if (to >= (int)tty->max_cols) to = (int)tty->max_cols - 1;
     for (int c = from; c <= to; c++)
         tty_fill_cell(tty, tty->row, (uint32_t)c, tty->bg);
+}
+
+static void tty_blit(tty_t *tty) {
+    if (!tty->backbuf || !tty->render_target) return;
+    uint32_t stride = tty_fb_stride();
+    uint32_t fb_size = stride * framebuffer_request.response->framebuffers[0]->height;
+    memcpy(tty->render_target, tty->backbuf, fb_size * sizeof(uint32_t));
 }
 
 static void tty_set_cursor(tty_t *tty, uint32_t row, uint32_t col) {
