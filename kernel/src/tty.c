@@ -10,10 +10,15 @@
 #include <logging/print.h>
 #include <multitasking/sched.h>
 #include <multitasking/thread.h>
+#include <apic.h>
 
 #define GLYPH_W 8
 #define GLYPH_H 8
 #define LETTER_SPACING_PX 1
+
+/* Coarse APIC-timer rate used to convert VTIME (tenths of a second) to
+   scheduler ticks.  The real rate is roughly 60-120 ticks/sec on QEMU. */
+#define TIMER_TICKS_PER_SEC 100
 
 extern volatile struct limine_framebuffer_request framebuffer_request;
 
@@ -466,26 +471,46 @@ int32_t tty_write(tty_t *tty, const uint8_t *buf, uint32_t count) {
 int32_t tty_read(tty_t *tty, uint8_t *buf, uint32_t count) {
     if (!tty || !buf || count == 0) return -1;
 
-    while (tty->cooked.count == 0) {
-        if (!current_tcb)
-            return 0;
+    uint32_t vtime = tty->termios.c_cc[VTIME];
+    uint64_t deadline = 0;
+    int have_deadline = 0;
+
+    for (;;) {
         asm volatile ("cli");
-        if (tty->cooked.count > 0) {
-            asm volatile ("sti");
-            break;
+        uint32_t n = 0;
+        while (n < count) {
+            uint8_t c;
+            if (!ring_pop(&tty->cooked, &c)) break;
+            buf[n++] = c;
+            if (tty->termios.c_lflag & ICANON && c == '\n') break;
+        }
+        asm volatile ("sti");
+
+        if (n > 0) {
+            return (int32_t)n;
+        }
+
+        if (vtime != 0) {
+            /* VTIME is in tenths of a second; TIMER_TICKS_PER_SEC is a
+               coarse approximation of the APIC timer rate. */
+            if (!have_deadline) {
+                deadline = system_ticks + (uint64_t)(vtime * TIMER_TICKS_PER_SEC / 10);
+                have_deadline = 1;
+            } else if ((int64_t)(system_ticks - deadline) >= 0) {
+                return 0;
+            }
+        }
+
+        if (!current_tcb) {
+            return 0;
         }
         tty->waiter = current_tcb;
-        block_current();
+        if (have_deadline) {
+            block_current_timeout(deadline);
+        } else {
+            block_current();
+        }
     }
-
-    uint32_t n = 0;
-    while (n < count) {
-        uint8_t c;
-        if (!ring_pop(&tty->cooked, &c)) break;
-        buf[n++] = c;
-        if (tty->termios.c_lflag & ICANON && c == '\n') break;
-    }
-    return (int32_t)n;
 }
 
 tty_t *tty_get_active() {

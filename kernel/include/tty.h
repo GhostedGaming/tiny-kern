@@ -21,10 +21,6 @@
 #define VTIME   6
 #define NCCS    8
 
-/* Coarse APIC-timer rate used to convert VTIME (tenths of a second) to
-   scheduler ticks.  The real rate is roughly 60-120 ticks/sec on QEMU. */
-#define TIMER_TICKS_PER_SEC 100
-
 typedef struct {
     uint32_t c_iflag;
     uint32_t c_oflag;
