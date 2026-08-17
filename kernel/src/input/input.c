@@ -122,11 +122,16 @@ void input_handle_event(uint8_t key, uint8_t make, uint8_t mods, uint8_t locks) 
 
     uint8_t shift = (mods & (KB_MOD_LSHIFT | KB_MOD_RSHIFT)) != 0;
     uint8_t ctrl  = (mods & (KB_MOD_LCTRL | KB_MOD_RCTRL)) != 0;
+    uint8_t alt   = (mods & (KB_MOD_LALT | KB_MOD_RALT)) != 0;
 
     char ch = input_keymap[key][shift ? 1 : 0];
 
     if (ctrl && ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')))
         ch = (char)(ch & 0x1F);
+
+    if (alt && ch) {
+        input_push('\x1B');
+    }
 
     if (locks & KB_LOCK_CAPS) {
         if (ch >= 'a' && ch <= 'z')
