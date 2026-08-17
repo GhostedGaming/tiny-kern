@@ -21,6 +21,9 @@ static tty_t   ttys[TTY_MAX];
 static uint8_t active_tty = 0;
 static void  (*global_output_fn)(tty_t *tty, char c) = NULL;
 
+static uint32_t *backbuf_storage = NULL;
+static uint32_t  backbuf_size = 0;
+
 static uint8_t tty_font[128][8] = {
     ['!'] = { 0x18, 0x3C, 0x3C, 0x18, 0x18, 0x00, 0x18, 0x00 },
     ['"'] = { 0x66, 0x66, 0x24, 0x00, 0x00, 0x00, 0x00, 0x00 },
@@ -531,6 +534,13 @@ void tty_init(void (*output_fn)(tty_t *tty, char c)) {
     uint32_t max_cols = (uint32_t)(fb->width / (GLYPH_W + LETTER_SPACING_PX));
     uint32_t max_rows = (uint32_t)(fb->height / GLYPH_H);
 
+    uint32_t fb_stride = fb->pitch / 4;
+    backbuf_size = fb_stride * fb->height;
+    backbuf_storage = (uint32_t *)kmalloc(backbuf_size * sizeof(uint32_t));
+    if (backbuf_storage) {
+        memset(backbuf_storage, 0, backbuf_size * sizeof(uint32_t));
+    }
+
     for (uint8_t i = 0; i < TTY_MAX; i++) {
         tty_t *t = &ttys[i];
         memset(t, 0, sizeof(tty_t));
@@ -556,6 +566,9 @@ void tty_init(void (*output_fn)(tty_t *tty, char c)) {
         t->origin_y  = 0;
         t->fg        = 0xFFFFFFFF;
         t->bg        = 0x00000000;
+        t->backbuf      = backbuf_storage;
+        t->render_target = (uint32_t *)fb->address;
+        t->backbuf_mode = 0;
 
         char name[8];
         name[0] = 't'; name[1] = 't'; name[2] = 'y';
