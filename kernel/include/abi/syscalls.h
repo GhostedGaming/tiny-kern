@@ -47,8 +47,11 @@
 #define SYS_TCSETATTR       44
 #define SYS_TTYINFO         45
 #define SYS_WAITPID         46
+#define SYS_UNLINKAT        47
+#define SYS_MKFS            48
+#define SYS_PIPE            49
 
-#define SYS_MAX             47
+#define SYS_MAX             50
 
 #define ARCH_SET_FS         1
 #define ARCH_GET_FS         2

@@ -150,6 +150,9 @@ vfs_node_t *vfs_resolve_parent(const char *path, char *name_out);
 
 uint8_t vfs_init();
 uint8_t vfs_mount(char *name, uint8_t drive_number);
+int vfs_mount_by_path(const char *dev_path, const char *target);
+int vfs_mkfs(const char *dev_path);
+int vfs_autmount_bins(void);
 void vfs_unmount(char *name);
 vfs_mount_t *vfs_get_mount(char *name);
 vfs_node_t *vfs_get_root();
@@ -200,6 +203,7 @@ long telldir(vfs_dir_t *dir);
 void seekdir(vfs_dir_t *dir, long pos);
 
 vfs_node_t *vfs_register_node(const char *path, uint32_t type, vfs_node_ops_t *ops, void *priv);
+vfs_file_t *vfs_file_create(vfs_node_t *node, int flags);
 fs_t vfs_get_type(vfs_blockdev_t *blockdev);
 
 uint8_t fat16_create_dirent_update(const void *vol_ptr, uint16_t dir_cluster, const char *name, uint16_t cluster, uint32_t size);

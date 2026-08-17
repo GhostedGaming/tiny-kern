@@ -1,12 +1,14 @@
 #include <stdint.h>
 #include <logging/print.h>
 #include <fs/vfs.h>
+#include <fs/pipe.h>
 #include <multitasking/sched.h>
 #include <multitasking/proc.h>
 #include <multitasking/thread.h>
 #include <signal.h>
 #include <mm/mmap.h>
 #include <mm/memory.h>
+#include <mm/heap.h>
 #include <apic.h>
 #include <tty.h>
 
@@ -45,6 +47,49 @@ static uint64_t rdtsc() {
     asm volatile ("rdtsc" : "=a"(lo), "=d"(hi));
     return ((uint64_t)hi << 32) | lo;
 }
+
+#define PIPE_END_READ  0
+#define PIPE_END_WRITE 1
+
+static ssize_t sys_pipe_vfs_read(vfs_node_t *node, void *buf, size_t count, off_t offset) {
+    (void)offset;
+    pipe_t *p = (pipe_t *)node->priv;
+    return pipe_read(p, buf, count);
+}
+
+static ssize_t sys_pipe_vfs_write(vfs_node_t *node, const void *buf, size_t count, off_t offset) {
+    (void)offset;
+    pipe_t *p = (pipe_t *)node->priv;
+    return pipe_write(p, buf, count);
+}
+
+static vfs_node_ops_t pipe_read_ops = {
+    .read    = sys_pipe_vfs_read,
+    .write   = NULL,
+    .readdir = NULL,
+    .lookup  = NULL,
+    .create  = NULL,
+    .unlink  = NULL,
+    .rmdir   = NULL,
+    .rename  = NULL,
+    .truncate = NULL,
+    .symlink = NULL,
+    .readlink = NULL,
+};
+
+static vfs_node_ops_t pipe_write_ops = {
+    .read    = NULL,
+    .write   = sys_pipe_vfs_write,
+    .readdir = NULL,
+    .lookup  = NULL,
+    .create  = NULL,
+    .unlink  = NULL,
+    .rmdir   = NULL,
+    .rename  = NULL,
+    .truncate = NULL,
+    .symlink = NULL,
+    .readlink = NULL,
+};
 
 static uint64_t sys_clock_gettime(int clk, struct timespec *ts) {
     if (!ts) return (uint64_t)-EFAULT;
@@ -261,7 +306,11 @@ uint64_t syscall_handler(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t ar
             break;
 
         case SYS_MOUNT:
-            result = vfs_mount((char *)arg1, (uint8_t)arg2) == 0 ? 0 : (uint64_t)-1;
+            result = (uint64_t)vfs_mount_by_path((const char *)arg1, (const char *)arg2);
+            break;
+
+        case SYS_MKFS:
+            result = (uint64_t)vfs_mkfs((const char *)arg1);
             break;
 
         case SYS_GETDENTS:
@@ -326,6 +375,52 @@ uint64_t syscall_handler(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t ar
         case SYS_WAITPID:
             result = ret_errno((long)waitpid((int)arg1, (int *)arg2, (int)arg3));
             break;
+
+        case SYS_UNLINKAT:
+            result = ret_errno(unlink((const char *)arg2));
+            break;
+
+        case SYS_PIPE: {
+            int *pipefd = (int *)arg1;
+            if (!pipefd) { result = (uint64_t)-EFAULT; break; }
+
+            pipe_t *p = pipe_create();
+            if (!p) { result = (uint64_t)-ENOMEM; break; }
+
+            vfs_node_t *rnode = vfs_node_alloc("pipe_r", VFS_NODE_PIPE);
+            if (!rnode) { pipe_destroy(p); result = (uint64_t)-ENOMEM; break; }
+            rnode->ops = &pipe_read_ops;
+            rnode->priv = p;
+
+            vfs_node_t *wnode = vfs_node_alloc("pipe_w", VFS_NODE_PIPE);
+            if (!wnode) { pipe_destroy(p); kfree(rnode); result = (uint64_t)-ENOMEM; break; }
+            wnode->ops = &pipe_write_ops;
+            wnode->priv = p;
+
+            struct pcb *cur = sched_current_proc();
+            if (!cur) { pipe_destroy(p); kfree(rnode); kfree(wnode); result = (uint64_t)-EINVAL; break; }
+
+            int rfd = -1, wfd = -1;
+            for (int i = 0; i < MAX_FDS; i++) {
+                if (!cur->fd_table[i]) { rfd = i; break; }
+            }
+            if (rfd < 0) { pipe_destroy(p); kfree(rnode); kfree(wnode); result = (uint64_t)-EMFILE; break; }
+
+            for (int i = rfd + 1; i < MAX_FDS; i++) {
+                if (!cur->fd_table[i]) { wfd = i; break; }
+            }
+            if (wfd < 0) { pipe_destroy(p); kfree(rnode); kfree(wnode); result = (uint64_t)-EMFILE; break; }
+
+            cur->fd_table[rfd] = vfs_file_create(rnode, O_RDONLY);
+            cur->fd_table[rfd]->offset = PIPE_END_READ;
+            cur->fd_table[wfd] = vfs_file_create(wnode, O_WRONLY);
+            cur->fd_table[wfd]->offset = PIPE_END_WRITE;
+
+            pipefd[0] = rfd;
+            pipefd[1] = wfd;
+            result = 0;
+            break;
+        }
     }
 
     if (num != SYS_SIGRETURN) {

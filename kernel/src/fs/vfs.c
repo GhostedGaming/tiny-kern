@@ -2,6 +2,8 @@
 #include <stddef.h>
 #include <stdarg.h>
 #include <mm/memory.h>
+#include <mm/frame.h>
+#include <mm/hhdm.h>
 #include <mm/heap.h>
 #include <storage/ahci.h>
 #include <storage/disk_writer.h>
@@ -12,6 +14,7 @@
 #include <multitasking/sched.h>
 #include <multitasking/proc.h>
 #include <fs/vfs.h>
+#include <fs/pipe.h>
 #include <logging/print.h>
 
 #define MAX_DRIVES  254
@@ -31,7 +34,12 @@ static vfs_node_t  *vfs_cwd  = NULL;
 
 static uint32_t     next_ino = 1;
 
-static uint32_t alloc_ino(void) {
+typedef struct {
+    uint8_t *data;
+    size_t   capacity;
+} ramfs_priv_t;
+
+static uint32_t alloc_ino() {
     return next_ino++;
 }
 
@@ -69,7 +77,7 @@ static int fd_alloc(vfs_file_t **table, size_t count) {
     return -1;
 }
 
-static vfs_file_t *vfs_file_create(vfs_node_t *node, int flags) {
+vfs_file_t *vfs_file_create(vfs_node_t *node, int flags) {
     vfs_file_t *file = kmalloc(sizeof(vfs_file_t));
     if (!file) {
         errno = ENOSPC;
@@ -97,6 +105,19 @@ static void vfs_file_unref(vfs_file_t *file) {
         file->ref_count--;
 
     if (file->ref_count == 0) {
+        if (file->node && file->node->type == VFS_NODE_PIPE && file->node->priv) {
+            pipe_t *p = (pipe_t *)file->node->priv;
+            if ((int)file->offset == 0) {
+                if (p->readers > 0) p->readers--;
+                pipe_wake_writers(p);
+            } else {
+                if (p->writers > 0) p->writers--;
+                pipe_wake_readers(p);
+            }
+            if (p->readers == 0 && p->writers == 0) {
+                pipe_destroy(p);
+            }
+        }
         if (file->node && file->node->ref_count > 0)
             file->node->ref_count--;
         kfree(file);
@@ -326,13 +347,23 @@ static uint8_t ahci_blockdev_write(vfs_blockdev_t *dev, uint32_t lba, uint8_t co
 }
 
 fs_t vfs_get_type(vfs_blockdev_t *blockdev) {
-    uint8_t buf[512];
-    if (blockdev->read(blockdev, 0, 1, buf) != 0) return (fs_t)-1;
-    if (memcmp(buf + 0x36, "FAT12   ", 8) == 0) return fat12;
-    if (memcmp(buf + 0x36, "FAT16   ", 8) == 0) return fat16;
-    if (memcmp(buf + 0x52, "FAT32   ", 8) == 0) return fat32;
-    if (memcmp(buf + 0x03, "EXFAT   ", 8) == 0) return exfat;
-    return (fs_t)-1;
+    uintptr_t frame = frame_alloc();
+    if (!frame) return (fs_t)-1;
+    uint8_t *buf = (uint8_t *)phys_to_virt(frame);
+
+    uint8_t type;
+    if (blockdev->read(blockdev, 0, 1, buf) != 0) {
+        frame_free(frame);
+        return (fs_t)-1;
+    }
+    if (memcmp(buf + 0x36, "FAT12   ", 8) == 0) type = fat12;
+    else if (memcmp(buf + 0x36, "FAT16   ", 8) == 0) type = fat16;
+    else if (memcmp(buf + 0x52, "FAT32   ", 8) == 0) type = fat32;
+    else if (memcmp(buf + 0x03, "EXFAT   ", 8) == 0) type = exfat;
+    else type = (uint8_t)-1;
+
+    frame_free(frame);
+    return (fs_t)type;
 }
 
 static ssize_t fat16_vfs_read(vfs_node_t *node, void *buf, size_t count, off_t offset) {
@@ -374,7 +405,7 @@ static ssize_t fat16_vfs_write(vfs_node_t *node, const void *buf, size_t count, 
     memcpy(tmp + offset, buf, count);
 
     if (priv->start_cluster) {
-        fat16_delete_file(priv->vol, priv->dir_cluster, node->name);
+        fat16_free_cluster_chain(priv->vol, priv->start_cluster);
         priv->start_cluster = 0;
     }
 
@@ -487,7 +518,7 @@ static int fat16_vfs_truncate(vfs_node_t *node, off_t length) {
     }
 
     if (priv->start_cluster) {
-        fat16_delete_file(priv->vol, priv->dir_cluster, node->name);
+        fat16_free_cluster_chain(priv->vol, priv->start_cluster);
         priv->start_cluster = 0;
     }
 
@@ -525,6 +556,95 @@ static vfs_node_ops_t fat16_ops = {
     .symlink = NULL,
     .readlink = NULL,
 };
+
+static ssize_t ramfs_read(vfs_node_t *node, void *buf, size_t count, off_t offset) {
+    ramfs_priv_t *priv = (ramfs_priv_t *)node->priv;
+    if (!priv) { errno = EBADF; return -1; }
+    if ((size_t)offset >= node->size) return 0;
+    size_t remaining = node->size - (size_t)offset;
+    if (count > remaining) count = remaining;
+    memcpy(buf, priv->data + offset, count);
+    return (ssize_t)count;
+}
+
+static ssize_t ramfs_write(vfs_node_t *node, const void *buf, size_t count, off_t offset) {
+    ramfs_priv_t *priv = (ramfs_priv_t *)node->priv;
+    if (!priv) { errno = EBADF; return -1; }
+
+    size_t needed = (size_t)offset + count;
+    if (needed > priv->capacity) {
+        size_t new_capacity = priv->capacity ? priv->capacity : 4096;
+        while (new_capacity < needed) new_capacity *= 2;
+        uint8_t *new_data = kmalloc(new_capacity);
+        if (!new_data) { errno = ENOSPC; return -1; }
+        memset(new_data, 0, new_capacity);
+        if (priv->data) {
+            memcpy(new_data, priv->data, node->size);
+            kfree(priv->data);
+        }
+        priv->data = new_data;
+        priv->capacity = new_capacity;
+    }
+
+    memcpy(priv->data + offset, buf, count);
+    if (needed > node->size) node->size = needed;
+    return (ssize_t)count;
+}
+
+static int ramfs_truncate(vfs_node_t *node, off_t length) {
+    ramfs_priv_t *priv = (ramfs_priv_t *)node->priv;
+    if (!priv) { errno = EBADF; return -1; }
+
+    size_t new_size = (size_t)length;
+    if (new_size > priv->capacity) {
+        size_t new_capacity = priv->capacity ? priv->capacity : 4096;
+        while (new_capacity < new_size) new_capacity *= 2;
+        uint8_t *new_data = kmalloc(new_capacity);
+        if (!new_data) { errno = ENOSPC; return -1; }
+        memset(new_data, 0, new_capacity);
+        if (priv->data) {
+            memcpy(new_data, priv->data, node->size < new_size ? node->size : new_size);
+            kfree(priv->data);
+        }
+        priv->data = new_data;
+        priv->capacity = new_capacity;
+    } else if (new_size > node->size && priv->data) {
+        memset(priv->data + node->size, 0, new_size - node->size);
+    }
+
+    node->size = new_size;
+    return 0;
+}
+
+static vfs_node_ops_t ramfs_ops = {
+    .read = ramfs_read,
+    .write = ramfs_write,
+    .readdir = NULL,
+    .lookup = NULL,
+    .create = NULL,
+    .unlink = NULL,
+    .rmdir = NULL,
+    .truncate = ramfs_truncate,
+    .rename = NULL,
+    .symlink = NULL,
+    .readlink = NULL,
+};
+
+static vfs_node_t *vfs_create_ramfs_file(vfs_node_t *parent, const char *name, uint32_t mode) {
+    vfs_node_t *node = vfs_node_alloc(name, VFS_NODE_FILE);
+    if (!node) return NULL;
+
+    ramfs_priv_t *priv = kmalloc(sizeof(ramfs_priv_t));
+    if (!priv) { kfree(node); errno = ENOSPC; return NULL; }
+    priv->data = NULL;
+    priv->capacity = 0;
+
+    node->mode = S_IFREG | (mode & 0777);
+    node->ops = &ramfs_ops;
+    node->priv = priv;
+    vfs_node_link_child(parent, node);
+    return node;
+}
 
 uint8_t vfs_mount(char *name, uint8_t drive_number) {
     if (mount_count >= MAX_DRIVES) return VFS_ERR_NO_SLOTS;
@@ -579,6 +699,68 @@ uint8_t vfs_mount(char *name, uint8_t drive_number) {
     c->ports[port].assigned_name = name;
 
     return VFS_OK;
+}
+
+static int vfs_err_to_errno(uint8_t vfs_err) {
+    switch (vfs_err) {
+        case VFS_OK:                  return 0;
+        case VFS_ERR_LETTER_IN_USE:   return -EBUSY;
+        case VFS_ERR_NO_SLOTS:        return -ENOMEM;
+        case VFS_ERR_INVALID_DEV:     return -ENODEV;
+        case VFS_ERR_ALREADY_MOUNTED: return -EBUSY;
+        case VFS_ERR_FS_INIT:         return -EINVAL;
+        default:                      return -EIO;
+    }
+}
+
+static vfs_blockdev_t vfs_make_blockdev(uint8_t drive_number) {
+    vfs_blockdev_priv_t *priv = kmalloc(sizeof(vfs_blockdev_priv_t));
+    vfs_blockdev_t blockdev = {0};
+    if (!priv) return blockdev;
+    priv->drive_number = drive_number;
+    blockdev.priv = priv;
+    blockdev.read = ahci_blockdev_read;
+    blockdev.write = ahci_blockdev_write;
+    return blockdev;
+}
+
+int vfs_mkfs(const char *dev_path) {
+    uint8_t drive_number;
+    if (devfs_resolve_drive(dev_path, &drive_number) != 0) return -ENODEV;
+
+    drive_t *d = drive_map_get(drive_number);
+    if (!d) return -ENODEV;
+
+    vfs_blockdev_t blockdev = vfs_make_blockdev(drive_number);
+    if (!blockdev.priv) return -ENOMEM;
+
+    int rc = fat16_format(&blockdev, (uint32_t)d->sector_count);
+    kfree(blockdev.priv);
+    if (rc != 0) return -EIO;
+    return 0;
+}
+
+int vfs_mount_by_path(const char *dev_path, const char *target) {
+    uint8_t drive_number;
+    if (devfs_resolve_drive(dev_path, &drive_number) != 0) return -ENODEV;
+    return vfs_err_to_errno(vfs_mount((char *)target, drive_number));
+}
+
+int vfs_autmount_bins(void) {
+    for (uint8_t i = 0; i < drive_map_count(); i++) {
+        drive_t *d = drive_map_get(i);
+        if (!d || d->sector_count == 0) continue;
+
+        vfs_blockdev_t blockdev = vfs_make_blockdev(i);
+        if (!blockdev.priv) continue;
+
+        if (vfs_get_type(&blockdev) == fat16) {
+            kfree(blockdev.priv);
+            return vfs_err_to_errno(vfs_mount("bins", i));
+        }
+        kfree(blockdev.priv);
+    }
+    return -1;
 }
 
 void vfs_unmount(char *name) {
@@ -652,10 +834,8 @@ int open(const char *path, int flags, ...) {
         if (parent->ops && parent->ops->create) {
             if (parent->ops->create(parent, name, VFS_NODE_FILE, mode) != 0) return -1;
         } else {
-            vfs_node_t *new_node = vfs_node_alloc(name, VFS_NODE_FILE);
+            vfs_node_t *new_node = vfs_create_ramfs_file(parent, name, mode);
             if (!new_node) return -1;
-            new_node->mode = S_IFREG | (mode & 0777);
-            vfs_node_link_child(parent, new_node);
         }
 
         node = vfs_resolve_path(path);
@@ -713,13 +893,11 @@ ssize_t read(int fd, void *buf, size_t count) {
 
     if (node->type == VFS_NODE_DEV) {
         devfs_dev_t *ddev = (devfs_dev_t *)node->priv;
-        if (ddev && ddev->read) {
+        if (ddev && !ddev->is_block && ddev->read) {
             ssize_t n = ddev->read(ddev, buf, count);
             if (n > 0) file->offset += n;
             return n;
         }
-        errno = EBADF;
-        return -1;
     }
 
     if (!node->ops || !node->ops->read) { errno = EBADF; return -1; }
@@ -757,13 +935,11 @@ ssize_t write(int fd, const void *buf, size_t count) {
 
     if (node->type == VFS_NODE_DEV) {
         devfs_dev_t *ddev = (devfs_dev_t *)node->priv;
-        if (ddev && ddev->write) {
+        if (ddev && !ddev->is_block && ddev->write) {
             ssize_t n = ddev->write(ddev, buf, count);
             if (n > 0) file->offset += n;
             return n;
         }
-        errno = EBADF;
-        return -1;
     }
 
     if (!node->ops || !node->ops->write) {
@@ -968,6 +1144,13 @@ int unlink(const char *path) {
 
     if (!target) { errno = ENOENT; return -1; }
     if (target->ref_count > 0) { errno = EACCES; return -1; }
+
+    if (target->type == VFS_NODE_FILE && target->ops == &ramfs_ops && target->priv) {
+        ramfs_priv_t *priv = (ramfs_priv_t *)target->priv;
+        if (priv->data) kfree(priv->data);
+        kfree(priv);
+    }
+
     vfs_node_unlink_child(parent, target);
     kfree(target);
     return 0;
@@ -1225,7 +1408,8 @@ ssize_t getdents64(int fd, void *buf, size_t count) {
 int closedir(vfs_dir_t *dir) {
     if (!dir) { errno = EBADF; return -1; }
     dir->node->ref_count--;
-    kfree(dir);    return 0;
+    kfree(dir);
+    return 0;
 }
 
 void rewinddir(vfs_dir_t *dir) {
