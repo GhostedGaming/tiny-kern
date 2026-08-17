@@ -46,6 +46,7 @@ void default_sig_handler(int sig);
 void sig_deliver_current(user_context_t *ctx);
 void sig_deliver(struct pcb *p, int sig, user_context_t *ctx);
 void sig_queue(struct pcb *p, int sig);
+void wake_threads(struct pcb *p);
 
 static inline int sigemptyset(sigset_t *set) {
     *set = 0;

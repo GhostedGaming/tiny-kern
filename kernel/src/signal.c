@@ -42,7 +42,7 @@ static const sig_default_action_t default_actions[NSIG] = {
     [SIGUSR2] = SIG_ACTION_TERMINATE,
 };
 
-static void wake_threads(struct pcb *p) {
+void wake_threads(struct pcb *p) {
     struct tcb *t = p->t;
     if (!t) {
         return;

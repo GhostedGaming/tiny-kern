@@ -209,6 +209,9 @@ void _exit(uint64_t exit_code) {
         p->exit_code = exit_code;
         if (p->ppcb) {
             sig_queue(p->ppcb, SIGCHLD);
+            if (!p->ppcb->stopped) {
+                wake_threads(p->ppcb);
+            }
         }
         p->is_zombie = 1;
         zombie_enqueue(p);
