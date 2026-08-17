@@ -258,10 +258,11 @@ static void tty_clear_line(tty_t *tty, int from, int to) {
 }
 
 static void tty_blit(tty_t *tty) {
-    if (!tty->backbuf || !tty->render_target) return;
+    if (!tty->backbuf) return;
     uint32_t stride = tty_fb_stride();
     uint32_t fb_size = stride * framebuffer_request.response->framebuffers[0]->height;
-    memcpy(tty->render_target, tty->backbuf, fb_size * sizeof(uint32_t));
+    uint32_t *real_fb = (uint32_t *)framebuffer_request.response->framebuffers[0]->address;
+    memcpy(real_fb, tty->backbuf, fb_size * sizeof(uint32_t));
 }
 
 static void tty_set_cursor(tty_t *tty, uint32_t row, uint32_t col) {
@@ -414,13 +415,15 @@ static void tty_esc_input(tty_t *tty, char c) {
     if ((c >= '@' && c <= '~') || c == 'H' || c == 'f' || c == 'm') {
         if (tty->esc_priv == 0) {
             tty_esc_finish(tty, c);
-        } else if ((c == 'l' || c == 'H') &&
+        } else if ((c == 'l' || c == 'h') &&
                    tty->esc_nparam >= 0 && tty->esc_param[0] == 25) {
             /* ESC[?25l = hide cursor → start back-buffer mode
                ESC[?25h = show cursor → blit and end back-buffer mode */
             if (c == 'l') {
-                tty->backbuf_mode = 1;
-                tty->render_target = tty->backbuf;
+                if (tty->backbuf) {
+                    tty->backbuf_mode = 1;
+                    tty->render_target = tty->backbuf;
+                }
             } else {
                 tty_blit(tty);
                 tty->backbuf_mode = 0;
