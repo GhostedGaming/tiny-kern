@@ -13,6 +13,7 @@
 #include <abi/errno.h>
 #include <abi/types.h>
 #include <binary_loaders/elf.h>
+#include <signal.h>
 
 typedef int pid_t;
 
@@ -33,7 +34,7 @@ typedef int pid_t;
 #define AT_RANDOM 25
 #define AT_EXECFN 31
 
-extern void fork_child_restore(void);
+extern void fork_child_restore();
 extern void jump_to_user(uint64_t entry, uint64_t stack);
 extern void exec_switch_resume(void *ksp);
 
@@ -206,6 +207,11 @@ void _exit(uint64_t exit_code) {
     struct pcb *p = sched_current_proc();
     if (p) {
         p->exit_code = exit_code;
+        if (p->ppcb) {
+            sig_queue(p->ppcb, SIGCHLD);
+        }
+        p->is_zombie = 1;
+        zombie_enqueue(p);
         print("EXIT pid=%d code=%lu\n", p->pid, (unsigned long)exit_code);
     } else {
         print("EXIT tid=%d code=%lu (no proc)\n", current_tcb->tid, (unsigned long)exit_code);
@@ -254,6 +260,8 @@ pid_t fork() {
     cp->exit_code = 0;
     cp->stopped = p->stopped;
     cp->is_zombie = 0;
+    cp->z_prev = NULL;
+    cp->z_next = NULL;
     cp->ppcb = p;
     cp->umask = p->umask;
     cp->mmap_cursor = p->mmap_cursor;
@@ -478,7 +486,6 @@ int waitpid(int pid, int *status, int options) {
         } else if (pid == -1) {
             for (struct pcb *z = zombie_head; z; z = z->z_next) {
                 if (z->ppcb == p) {
-                    zombie_remove(z);
                     child = z;
                     break;
                 }
@@ -519,7 +526,6 @@ int waitpid(int pid, int *status, int options) {
             }
         }
 
-        current_tcb->state = Ready;
-        schedule();
+        block_current();
     }
 }
