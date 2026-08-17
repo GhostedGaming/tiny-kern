@@ -390,10 +390,24 @@ static void tty_esc_input(tty_t *tty, char c) {
     }
 
     if ((c >= '@' && c <= '~') || c == 'H' || c == 'f' || c == 'm') {
-        if (tty->esc_priv == 0)
+        if (tty->esc_priv == 0) {
             tty_esc_finish(tty, c);
-        else
+        } else if ((c == 'l' || c == 'H') &&
+                   tty->esc_nparam >= 0 && tty->esc_param[0] == 25) {
+            /* ESC[?25l = hide cursor → start back-buffer mode
+               ESC[?25h = show cursor → blit and end back-buffer mode */
+            if (c == 'l') {
+                tty->backbuf_mode = 1;
+                tty->render_target = tty->backbuf;
+            } else {
+                tty_blit(tty);
+                tty->backbuf_mode = 0;
+                tty->render_target = (uint32_t *)framebuffer_request.response->framebuffers[0]->address;
+            }
             tty_esc_reset(tty);
+        } else {
+            tty_esc_reset(tty);
+        }
     } else {
         tty_esc_reset(tty);
     }
