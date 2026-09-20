@@ -83,6 +83,14 @@ void input_handle_event(uint8_t key, uint8_t make, uint8_t mods, uint8_t locks) 
     if (!make)
         return;
 
+    uint8_t ctrl  = (mods & (KB_MOD_LCTRL | KB_MOD_RCTRL)) != 0;
+    uint8_t alt   = (mods & (KB_MOD_LALT | KB_MOD_RALT)) != 0;
+
+    if (ctrl && alt && !(key & KB_KEY_EXTENDED) && key >= 0x3B && key <= 0x3E) {
+        tty_switch((uint8_t)(key - 0x3B));
+        return;
+    }
+
     if (key == INPUT_KEY_ENTER) {
         input_push('\r');
         return;
@@ -121,8 +129,6 @@ void input_handle_event(uint8_t key, uint8_t make, uint8_t mods, uint8_t locks) 
         return;
 
     uint8_t shift = (mods & (KB_MOD_LSHIFT | KB_MOD_RSHIFT)) != 0;
-    uint8_t ctrl  = (mods & (KB_MOD_LCTRL | KB_MOD_RCTRL)) != 0;
-    uint8_t alt   = (mods & (KB_MOD_LALT | KB_MOD_RALT)) != 0;
 
     char ch = input_keymap[key][shift ? 1 : 0];
 

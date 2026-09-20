@@ -5,6 +5,7 @@
 #include <mm/heap.h>
 #include <mm/page.h>
 #include <fs/vfs.h>
+#include <logging/print.h>
 #include <binary_loaders/elf.h>
 
 uint64_t elf64_parse(int fd, uintptr_t cr3, struct elf64_load_info *info) {

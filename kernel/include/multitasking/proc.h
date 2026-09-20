@@ -6,6 +6,10 @@
 
 #define MAX_FDS 256
 
+#define WAIT_EVT_EXITED    1
+#define WAIT_EVT_STOPPED   2
+#define WAIT_EVT_CONTINUED 4
+
 extern uint64_t process_count;
 
 struct mmap_region {
@@ -17,6 +21,7 @@ struct mmap_region {
 
 struct pcb {
     uint64_t pid;
+    uint64_t pgid;
     uint64_t t_count;
     uintptr_t addr_space;
     struct tcb *t;
@@ -25,6 +30,8 @@ struct pcb {
     uint64_t exit_code;
     uint8_t stopped;
     uint8_t is_zombie;
+    uint8_t wait_events;
+    int wait_stop_sig;
     struct pcb *ppcb;
     struct pcb *z_prev;
     struct pcb *z_next;
@@ -47,5 +54,5 @@ int waitpid(int pid, int *status, int options);
 
 void zombie_enqueue(struct pcb *p);
 void zombie_remove(struct pcb *p);
-struct pcb *zombie_pop(void);
+struct pcb *zombie_pop();
 extern struct pcb *zombie_head;

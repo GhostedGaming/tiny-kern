@@ -738,6 +738,11 @@ LIBTCCAPI TCCState *tcc_new(void)
     s->warn_implicit_function_declaration = 1;
     s->ms_extensions = 1;
 
+#ifdef TCC_TINYKERN_STATIC
+    /* no dynamic linker in the kernel: link static by default */
+    s->static_link = 1;
+#endif
+
 #ifdef CHAR_IS_UNSIGNED
     s->char_is_unsigned = 1;
 #endif

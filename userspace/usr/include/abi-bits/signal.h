@@ -77,7 +77,7 @@ typedef void (*__sighandler)(int);
 #define SIGRTMIN 35
 #define SIGRTMAX 64
 
-#define NSIG 32
+#define NSIG 65
 #define _NSIG NSIG
 
 #define SIG_BLOCK   0

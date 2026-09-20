@@ -1079,6 +1079,14 @@ ST_FUNC void build_got_entries(TCCState *s1)
             }
 
 #ifdef TCC_TARGET_X86_64
+            /* For fully static executables there is no dynamic loader to
+               resolve PLT/GOT stubs at runtime, so resolve calls to
+               statically known symbols directly instead of via the PLT. */
+            if (s1->output_type == TCC_OUTPUT_EXE && s1->static_link &&
+                type == R_X86_64_PLT32) {
+                rel->r_info = ELFW(R_INFO)(sym_index, R_X86_64_PC32);
+                continue;
+            }
             if ((type == R_X86_64_PLT32 || type == R_X86_64_PC32) &&
                 (ELFW(ST_VISIBILITY)(sym->st_other) != STV_DEFAULT ||
 		 ELFW(ST_BIND)(sym->st_info) == STB_LOCAL)) {
@@ -1228,6 +1236,20 @@ static void tcc_add_linker_symbols(TCCState *s1)
                 bss_section->data_offset, 0,
                 ELFW(ST_INFO)(STB_GLOBAL, STT_NOTYPE), 0,
                 bss_section->sh_num, "_end");
+    if (s1->output_type == TCC_OUTPUT_EXE) {
+        /* GNU ld defines __ehdr_start to point at the in-memory ELF
+           header (i.e. the image base where the first PT_LOAD segment,
+           and with it the ELF file header, is loaded). tcc has no such
+           magic symbol, so the weak placeholder that crti.o provides
+           would be used instead; since that placeholder lives in .bss
+           it resolves to a zeroed slot and any runtime code reading
+           the ELF header (e.g. mlibc's static startup) gets garbage.
+           Override it with an absolute symbol at the image base. */
+        set_elf_sym(symtab_section,
+                    ELF_START_ADDR, 0,
+                    ELFW(ST_INFO)(STB_GLOBAL, STT_NOTYPE), 0,
+                    SHN_ABS, "__ehdr_start");
+    }
 #ifndef TCC_TARGET_PE
     /* horrible new standard ldscript defines */
     add_init_array_defines(s1, ".preinit_array");
@@ -1738,6 +1760,72 @@ static int layout_sections(TCCState *s1, ElfW(Phdr) *phdr, int phnum,
     return file_offset;
 }
 
+/* return 1 if the linked image contains allocated TLS sections */
+static int tls_present(TCCState *s1)
+{
+    int i;
+    Section *s;
+
+    for (i = 1; i < s1->nb_sections; i++) {
+        s = s1->sections[i];
+        if ((s->sh_flags & SHF_TLS) && (s->sh_flags & SHF_ALLOC))
+            return 1;
+    }
+    return 0;
+}
+
+/* Compute the static TLS layout of the linked image and store it in s1.
+   Must be called after layout_sections so that section addresses are known. */
+static void compute_tls_layout(TCCState *s1)
+{
+    int i, found = 0;
+    Section *s;
+    addr_t min_addr = 0, max_end = 0, align = 1;
+
+    s1->tls_vaddr = 0;
+    s1->tls_memsz = 0;
+    s1->tls_filesz = 0;
+    s1->tls_fileoff = 0;
+    s1->tls_align = 1;
+    s1->tls_offset = 0;
+
+    for (i = 1; i < s1->nb_sections; i++) {
+        s = s1->sections[i];
+        if (!(s->sh_flags & SHF_TLS) || !(s->sh_flags & SHF_ALLOC))
+            continue;
+        if (!found) {
+            min_addr = s->sh_addr;
+            max_end = s->sh_addr + s->sh_size;
+            align = s->sh_addralign;
+            if (s->sh_type != SHT_NOBITS) {
+                s1->tls_fileoff = s->sh_offset;
+                s1->tls_filesz = s->sh_size;
+            }
+            found = 1;
+        } else {
+            if (s->sh_addr < min_addr) {
+                min_addr = s->sh_addr;
+                if (s->sh_type != SHT_NOBITS) {
+                    s1->tls_fileoff = s->sh_offset;
+                    s1->tls_filesz = s->sh_size;
+                }
+            }
+            if (s->sh_addr + s->sh_size > max_end)
+                max_end = s->sh_addr + s->sh_size;
+            if (s->sh_addralign > align)
+                align = s->sh_addralign;
+        }
+    }
+    if (found) {
+        s1->tls_vaddr = min_addr;
+        s1->tls_memsz = max_end - min_addr;
+        s1->tls_align = align;
+        /* on x86-64 the TLS block sits directly below the thread pointer */
+        s1->tls_offset = -(addr_t)((s1->tls_memsz + s1->tls_align - 1) &
+                                   ~(s1->tls_align - 1));
+    }
+}
+
 static void fill_unloadable_phdr(ElfW(Phdr) *phdr, int phnum, Section *interp,
                                  Section *dynamic)
 {
@@ -2061,7 +2149,7 @@ static int elf_output_file(TCCState *s1, const char *filename)
 {
     int i, ret, phnum, shnum, file_type, file_offset, *sec_order;
     struct dyn_inf dyninf = {0};
-    ElfW(Phdr) *phdr;
+    ElfW(Phdr) *phdr, *ph;
     ElfW(Sym) *sym;
     Section *strsec, *interp, *dynamic, *dynstr;
     int textrel;
@@ -2166,7 +2254,7 @@ static int elf_output_file(TCCState *s1, const char *filename)
     else if (file_type == TCC_OUTPUT_DLL)
         phnum = 3;
     else if (s1->static_link)
-        phnum = 2;
+        phnum = 2 + tls_present(s1);
     else
         phnum = 5;
 
@@ -2187,6 +2275,20 @@ static int elf_output_file(TCCState *s1, const char *filename)
     /* Fill remaining program header and finalize relocation related to dynamic
        linking. */
     if (file_type != TCC_OUTPUT_OBJ) {
+        if (s1->static_link) {
+            compute_tls_layout(s1);
+            if (s1->tls_memsz) {
+                ph = &phdr[phnum - 1];
+                ph->p_type = PT_TLS;
+                ph->p_offset = s1->tls_fileoff;
+                ph->p_vaddr = s1->tls_vaddr;
+                ph->p_paddr = s1->tls_vaddr;
+                ph->p_filesz = s1->tls_filesz;
+                ph->p_memsz = s1->tls_memsz;
+                ph->p_flags = PF_R;
+                ph->p_align = s1->tls_align;
+            }
+        }
         fill_unloadable_phdr(phdr, phnum, interp, dynamic);
         if (dynamic) {
             dynamic->data_offset = dyninf.data_offset;
@@ -2212,13 +2314,18 @@ static int elf_output_file(TCCState *s1, const char *filename)
         ret = final_sections_reloc(s1);
         if (ret)
             goto the_end;
-	tidy_section_headers(s1, sec_order);
 
-        /* Perform relocation to GOT or PLT entries */
+        /* Perform relocation to GOT or PLT entries.  This must happen
+           before tidy_section_headers(), because that drops the now
+           unneeded reloc sections from the iterable section list (their
+           sh_name stays 0 for static executables, so they are shunted
+           past nb_sections), and fill_got() needs to walk those reloc
+           sections to find the GOT slots to populate. */
         if (file_type == TCC_OUTPUT_EXE && s1->static_link)
             fill_got(s1);
         else if (s1->got)
             fill_local_got_entries(s1);
+	tidy_section_headers(s1, sec_order);
     }
 
     /* Create the ELF file with name 'filename' */
@@ -2280,6 +2387,29 @@ ST_FUNC int tcc_object_type(int fd, ElfW(Ehdr) *h)
 
 /* load an object file and merge it with current files */
 /* XXX: handle correctly stab (debug) info */
+/* Fold legacy '.ctors'/'.dtors' and priority-named
+   '.init_array.NNNNN'/'.fini_array.NNNNN'/'.preinit_array.NNNNN'
+   sections into the plain '.init_array'/'.fini_array'/'.preinit_array'
+   sections.  GNU ld does the same via SORT_BY_INIT_PRIORITY in the
+   default linker script (cf. userspace/linker.ld).  tcc's internal
+   linker has no linker script, so without this the libc constructors
+   (e.g. mlibc's init_stdio, which initializes stdout) end up in
+   '.ctors.*' sections that nothing ever runs, leaving __init_array_start
+   == __init_array_end and stdout == NULL.  Returns the folded section
+   name, or NULL if SNAME needs no folding. */
+static const char *fold_array_section_name(const char *name)
+{
+    if (!strncmp(name, ".init_array.", 12) ||
+        !strcmp(name, ".ctors") || !strncmp(name, ".ctors.", 7))
+        return ".init_array";
+    if (!strncmp(name, ".fini_array.", 12) ||
+        !strcmp(name, ".dtors") || !strncmp(name, ".dtors.", 7))
+        return ".fini_array";
+    if (!strncmp(name, ".preinit_array.", 15))
+        return ".preinit_array";
+    return NULL;
+}
+
 ST_FUNC int tcc_load_object_file(TCCState *s1,
                                 int fd, unsigned long file_offset)
 {
@@ -2353,6 +2483,32 @@ ST_FUNC int tcc_load_object_file(TCCState *s1,
             continue;
         sh = &shdr[i];
         sh_name = (char *) strsec + sh->sh_name;
+        /* Fold legacy '.ctors'/'.dtors' and priority-named array sections
+           into the plain '.init_array'/'.fini_array'/'.preinit_array'
+           sections, and their relocation sections likewise, so that the
+           whole constructor table ends up in the single section that
+           __init_array_start/__init_array_end span.  Normalize the types
+           so that all sources of one table merge cleanly. */
+        if (sh->sh_type == SHT_RELX) {
+            const char *tname = (char *) strsec + shdr[sh->sh_info].sh_name;
+            const char *folded = fold_array_section_name(tname);
+            if (folded) {
+                char buf[256];
+                snprintf(buf, sizeof(buf), REL_SECTION_FMT, folded);
+                sh_name = buf;
+            }
+        } else {
+            const char *folded = fold_array_section_name(sh_name);
+            if (folded) {
+                sh_name = (char *) folded;
+                if (folded[1] == 'i')
+                    sh->sh_type = SHT_INIT_ARRAY;
+                else if (folded[1] == 'f')
+                    sh->sh_type = SHT_FINI_ARRAY;
+                else
+                    sh->sh_type = SHT_PREINIT_ARRAY;
+            }
+        }
         /* ignore sections types we do not handle */
         if (sh->sh_type != SHT_PROGBITS &&
             sh->sh_type != SHT_RELX &&

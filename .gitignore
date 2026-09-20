@@ -2,6 +2,7 @@
 /edk2-ovmf-bins
 /sysroot
 /.cache
+/.vscode
 /tools/build-*
 /tools/cross
 /userspace/bin

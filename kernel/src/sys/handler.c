@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <logging/print.h>
 #include <fs/vfs.h>
+#include <fs/devfs.h>
 #include <fs/pipe.h>
 #include <multitasking/sched.h>
 #include <multitasking/proc.h>
@@ -23,6 +24,9 @@ extern int fork();
 extern int execve(const char *path, char *const argv[], char *const envp[]);
 extern int pause();
 extern int dup(int fd);
+extern int setpgid(int pid, int pgid);
+extern int getpgid(int pid);
+extern int getpgrp(void);
 
 #define UNDEFINED_SYSCALL 10000000
 #define MAX_FCNTL_FDS 256
@@ -143,6 +147,63 @@ static uint64_t sys_fcntl(int fd, int cmd, uint64_t arg) {
 uint64_t syscall_handler(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t arg3,
                          uint64_t arg4, uint64_t arg5, user_context_t *ctx) {
     uint64_t result = UNDEFINED_SYSCALL;
+
+    {
+        struct pcb *tp = sched_current_proc();
+        if (tp && tp->pid == 2) {
+            print("STRACE pid2 syscall=%lu\n", num);
+            if (num == SYS_KILL) {
+                print("STRACE pid2 ctx: rax=%#lx rbx=%#lx rcx=%#lx rdx=%#lx\n",
+                      ctx->rax, ctx->rbx, ctx->rcx, ctx->rdx);
+                print("STRACE pid2 ctx: rsi=%#lx rdi=%#lx rbp=%#lx rsp=%#lx\n",
+                      ctx->rsi, ctx->rdi, ctx->rbp, ctx->rsp);
+                print("STRACE pid2 ctx: r8=%#lx r9=%#lx r10=%#lx r11=%#lx\n",
+                      ctx->r8, ctx->r9, ctx->r10, ctx->r11);
+                print("STRACE pid2 ctx: r12=%#lx r13=%#lx r14=%#lx r15=%#lx rip=%#lx\n",
+                      ctx->r12, ctx->r13, ctx->r14, ctx->r15, ctx->rip);
+                print("STRACE pid2 ctx: rflags=%#lx cs=%#lx ss=%#lx\n",
+                      ctx->rflags, ctx->cs, ctx->ss);
+                uint64_t f = current_tcb->fs_base;
+                print("STRACE pid2 fs_base=%#lx tls_curloc=%#lx glob_locale=%#lx\n",
+                      f,
+                      *(uint64_t *)(f - 0x118),
+                      *(uint64_t *)0x4e5e40);
+                print("STRACE pid2 tcb self=%#lx dtvSize=%#lx dtv=%#lx tid=%#lx canary=%#lx\n",
+                      *(uint64_t *)(f + 0x0),
+                      *(uint64_t *)(f + 0x8),
+                      *(uint64_t *)(f + 0x10),
+                      *(uint64_t *)(f + 0x18),
+                      *(uint64_t *)(f + 0x28));
+                print("STRACE pid2 tlsblk: -0x130=%#lx -0x120=%#lx -0x110=%#lx -0x100=%#lx\n",
+                      *(uint64_t *)(f - 0x130),
+                      *(uint64_t *)(f - 0x120),
+                      *(uint64_t *)(f - 0x110),
+                      *(uint64_t *)(f - 0x100));
+                print("STRACE pid2 dotdata: [0]=%#lx [8]=%#lx [0x10]=%#lx [0x18]=%#lx\n",
+                      *(uint64_t *)0x4e5000,
+                      *(uint64_t *)0x4e5008,
+                      *(uint64_t *)0x4e5010,
+                      *(uint64_t *)0x4e5018);
+                uint64_t *lp = (uint64_t *)(*(uint64_t *)0x4e5e40);
+                if ((uint64_t)lp < 0x700000000000ULL) {
+                    print("STRACE pid2 locate_numeric: +870=%#lx +888=%#lx +8a0=%#lx\n",
+                          *(uint64_t *)&((uint8_t *)lp)[0x870],
+                          *(uint64_t *)&((uint8_t *)lp)[0x888],
+                          *(uint64_t *)&((uint8_t *)lp)[0x8a0]);
+                }
+                uint64_t *sp = (uint64_t *)ctx->rsp;
+                for (int i = 0; i < 180; i++) {
+                    if (i % 4 == 0)
+                        print("\nSTRACE pid2 stack[%d..]:", i);
+                    if ((uint64_t)(sp + i) < 0x700000000000ULL)
+                        print(" %#lx", sp[i]);
+                    else
+                        print(" <bad>");
+                }
+                print("\n");
+            }
+        }
+    }
 
     switch (num) {
         case SYS_READ:
@@ -269,6 +330,18 @@ uint64_t syscall_handler(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t ar
 
         case SYS_KILL:
             result = (uint64_t)kill((int)arg1, (int)arg2);
+            break;
+
+        case SYS_SETPGID:
+            result = (uint64_t)setpgid((int)arg1, (int)arg2);
+            break;
+
+        case SYS_GETPGID:
+            result = (uint64_t)getpgid((int)arg1);
+            break;
+
+        case SYS_GETPGRP:
+            result = (uint64_t)getpgrp();
             break;
 
         case SYS_UNAME:
@@ -421,12 +494,35 @@ uint64_t syscall_handler(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t ar
             result = 0;
             break;
         }
+
+        case SYS_IOCTL: {
+            int fd = (int)arg1;
+            unsigned long req = (unsigned long)arg2;
+            void *user_arg = (void *)arg3;
+            struct pcb *proc = sched_current_proc();
+            if (!proc || fd < 0 || fd >= MAX_FDS || !proc->fd_table[fd]) {
+                result = (uint64_t)-EBADF;
+                break;
+            }
+            vfs_node_t *node = proc->fd_table[fd]->node;
+            if (!node || node->type != VFS_NODE_DEV || !node->priv) {
+                result = (uint64_t)(-ENOTTY);
+                break;
+            }
+            devfs_dev_t *dev = (devfs_dev_t *)node->priv;
+            if (dev->ioctl) {
+                result = (uint64_t)dev->ioctl(dev, req, user_arg);
+            } else {
+                result = (uint64_t)(-ENOTTY);
+            }
+            break;
+        }
     }
 
     if (num != SYS_SIGRETURN) {
         ctx->rax = result;
     }
-    sig_deliver_current(ctx);
+    sig_deliver_current(ctx, num);
 
     return result;
 }

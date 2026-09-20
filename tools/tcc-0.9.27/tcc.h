@@ -779,6 +779,14 @@ struct TCCState {
     Section *got;
     Section *plt;
 
+    /* static TLS layout of the linked image, filled in by elf_output_file */
+    addr_t tls_vaddr;   /* virtual address of the TLS block start (.tdata) */
+    addr_t tls_memsz;   /* p_memsz of the PT_TLS segment */
+    addr_t tls_filesz;  /* p_filesz of the PT_TLS segment (.tdata size) */
+    addr_t tls_fileoff; /* file offset of the TLS image (.tdata) */
+    addr_t tls_align;   /* alignment of the TLS block */
+    addr_t tls_offset;  /* offset of the TLS block relative to the thread pointer */
+
     /* temporary dynamic symbol sections (for dll loading) */
     Section *dynsymtab_section;
     /* exported dynamic symbol section */

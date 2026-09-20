@@ -22,6 +22,9 @@
 #define VSUSP   10
 #define NCCS    11
 
+#define TIOCGPGRP 0x540F
+#define TIOCSPGRP 0x5410
+
 typedef struct {
     uint32_t c_iflag;
     uint32_t c_oflag;
@@ -53,6 +56,7 @@ struct tty {
     void (*push_char)(tty_t *tty, char c);
     uint8_t    active;
     struct tcb *waiter;
+    uint32_t   eof_pending;
 
     uint32_t   col;
     uint32_t   row;
@@ -69,8 +73,9 @@ struct tty {
     uint32_t   bg;
     uint32_t  *backbuf;
     uint32_t  *render_target;
+    uint32_t  *saved_render_target;
     int        backbuf_mode;
-    uint64_t   fg_pid;
+    uint64_t   fg_pgrp;
 };
 
 struct termios_user {

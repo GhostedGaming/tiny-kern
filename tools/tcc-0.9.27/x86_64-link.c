@@ -42,6 +42,11 @@ int code_reloc (int reloc_type)
         case R_X86_64_COPY:
         case R_X86_64_RELATIVE:
         case R_X86_64_GOTOFF64:
+        case R_X86_64_TPOFF32:
+        case R_X86_64_TPOFF64:
+        case R_X86_64_DTPOFF32:
+        case R_X86_64_DTPOFF64:
+        case R_X86_64_DTPMOD64:
             return 0;
 
         case R_X86_64_PC32:
@@ -66,6 +71,11 @@ int gotplt_entry_type (int reloc_type)
         case R_X86_64_JUMP_SLOT:
         case R_X86_64_COPY:
         case R_X86_64_RELATIVE:
+        case R_X86_64_TPOFF32:
+        case R_X86_64_TPOFF64:
+        case R_X86_64_DTPOFF32:
+        case R_X86_64_DTPOFF64:
+        case R_X86_64_DTPMOD64:
             return NO_GOTPLT_ENTRY;
 
 	/* The following relocs wouldn't normally need GOT or PLT
@@ -291,6 +301,22 @@ void relocate(TCCState *s1, ElfW_Rel *rel, int type, unsigned char *ptr, addr_t 
             add32le(ptr, val - s1->pe_imagebase);
 #endif
             /* do nothing */
+            break;
+
+        case R_X86_64_TPOFF32:
+            add32le(ptr, val + s1->tls_offset - s1->tls_vaddr);
+            break;
+        case R_X86_64_TPOFF64:
+            add64le(ptr, val + s1->tls_offset - s1->tls_vaddr);
+            break;
+        case R_X86_64_DTPMOD64:
+            write64le(ptr, 1);
+            break;
+        case R_X86_64_DTPOFF32:
+            add32le(ptr, val - s1->tls_vaddr);
+            break;
+        case R_X86_64_DTPOFF64:
+            add64le(ptr, val - s1->tls_vaddr);
             break;
     }
 }

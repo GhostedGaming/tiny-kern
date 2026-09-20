@@ -45,8 +45,8 @@ int sigpending(sigset_t *set);
 int sigsuspend(const sigset_t *mask);
 int sigreturn(user_context_t *ctx);
 void default_sig_handler(int sig);
-void sig_deliver_current(user_context_t *ctx);
-void sig_deliver(struct pcb *p, int sig, user_context_t *ctx);
+void sig_deliver_current(user_context_t *ctx, uint64_t syscall_num);
+void sig_deliver(struct pcb *p, int sig, user_context_t *ctx, uint64_t syscall_num);
 void sig_queue(struct pcb *p, int sig);
 void wake_threads(struct pcb *p);
 

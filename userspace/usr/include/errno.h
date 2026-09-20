@@ -10,8 +10,7 @@ extern "C" {
 #ifndef __MLIBC_ABI_ONLY
 
 /* Some programs define their own errno as an "extern int" if it is not a macro. */
-#define errno __mlibc_errno
-extern __thread int __mlibc_errno;
+#define errno (*__errno_location())
 
 int *__errno_location(void);
 

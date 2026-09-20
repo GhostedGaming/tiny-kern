@@ -126,6 +126,7 @@ uint8_t apic_init() {
 
 void timer_handler() {
     system_ticks++;
+    sched_check_timeouts();
     apic_eoi();
     schedule();
 }

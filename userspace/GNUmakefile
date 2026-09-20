@@ -47,7 +47,10 @@ clean:
 bin/tcc: $(TCCSRC)/tcc
 	cp $< $@
 
-usr: bin/tcc
+bin/edit: bin/kilo
+	cp $< $@
+
+usr: bin/tcc bin/edit
 	@mkdir -p usr/bin usr/lib usr/lib/tcc usr/include usr/src
 	cp $(TCCSRC)/tcc usr/bin/tcc
 	cp $(TCCSRC)/libtcc1.a usr/lib/tcc/

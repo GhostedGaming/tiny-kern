@@ -74,10 +74,18 @@ static void sig_default_action(struct pcb *p, int sig) {
             p->exit_code = 128 + sig;
             if (p == sched_current_proc()) {
                 schedule();
+                asm volatile ("sti");
                 for (;;) asm volatile ("hlt");
             }
             break;
         case SIG_ACTION_STOP:
+            if (!p->stopped) {
+                p->wait_events |= WAIT_EVT_STOPPED;
+                p->wait_stop_sig = sig;
+                if (p->ppcb) {
+                    wake_threads(p->ppcb);
+                }
+            }
             p->stopped = 1;
             if (t) {
                 struct tcb *it = t;
@@ -116,9 +124,17 @@ void sig_queue(struct pcb *p, int sig) {
     sig_handler_t h = p->sigstate.actions[sig].sa_handler;
 
     if (sig == SIGCONT) {
+        int was_stopped = p->stopped;
         p->stopped = 0;
         p->sigstate.pending &= ~STOP_BITS;
         wake_threads(p);
+        if (was_stopped) {
+            p->wait_events &= ~WAIT_EVT_STOPPED;
+            p->wait_events |= WAIT_EVT_CONTINUED;
+            if (p->ppcb) {
+                wake_threads(p->ppcb);
+            }
+        }
         if (h != SIG_DFL && h != SIG_IGN) {
             p->sigstate.pending |= bit;
         }
@@ -154,7 +170,7 @@ static void put_sigreturn_tramp(uint8_t *dst) {
     dst[6] = 0x80;
 }
 
-void sig_deliver(struct pcb *p, int sig, user_context_t *ctx) {
+void sig_deliver(struct pcb *p, int sig, user_context_t *ctx, uint64_t syscall_num) {
     if (!p || !ctx || sig <= 0 || sig >= NSIG) {
         return;
     }
@@ -200,14 +216,20 @@ void sig_deliver(struct pcb *p, int sig, user_context_t *ctx) {
     }
 
     uint8_t *base = (uint8_t *)fr;
-    uintptr_t tramp = (uintptr_t)base - 16;
+    uintptr_t tramp = (uintptr_t)base - 4096;
+    if (tramp < USER_STACK_BASE) {
+        sig_default_action(p, sig);
+        return;
+    }
     *(uint64_t *)(base - 8) = tramp;
     put_sigreturn_tramp((uint8_t *)tramp);
 
     if (fr->sa_flags & SA_RESTART) {
-        uint8_t *inst = (uint8_t *)ctx->rip;
-        if (inst[0] == 0xCD && inst[1] == 0x80) {
-            ctx->rip -= 2;
+        uint8_t *inst = (uint8_t *)(ctx->rip - 2);
+        if ((inst[0] == 0xCD && inst[1] == 0x80) ||
+            (inst[0] == 0x0F && inst[1] == 0x05)) {
+            fr->ctx.rip -= 2;
+            fr->ctx.rax = syscall_num;
         }
     }
 
@@ -220,7 +242,7 @@ void sig_deliver(struct pcb *p, int sig, user_context_t *ctx) {
     }
 }
 
-void sig_deliver_current(user_context_t *ctx) {
+void sig_deliver_current(user_context_t *ctx, uint64_t syscall_num) {
     struct pcb *p = sched_current_proc();
     if (!p || !ctx) {
         return;
@@ -230,7 +252,7 @@ void sig_deliver_current(user_context_t *ctx) {
         return;
     }
     int sig = (int)__builtin_ctzll(ready) + 1;
-    sig_deliver(p, sig, ctx);
+    sig_deliver(p, sig, ctx, syscall_num);
 }
 
 int sigaction(int sig, const sigaction_t *act, sigaction_t *oldact) {
@@ -267,24 +289,65 @@ void (*signal(int sig, void (*handler)(int)))(int) {
     return old.sa_handler;
 }
 
-int kill(int pid, int sig) {
-    struct pcb *p;
-    if (pid <= 0) {
-        p = sched_current_proc();
-    } else {
-        p = proc_find((uint64_t)pid);
-    }
-    if (!p) {
+static int kill_group(uint64_t pgid, int sig) {
+    if (!proc_list) {
         return -ESRCH;
     }
+    int found = 0;
+    struct pcb *r = proc_list;
+    do {
+        if (r->pgid == pgid) {
+            found = 1;
+            sig_queue(r, sig);
+        }
+        r = r->next;
+    } while (r != proc_list);
+    return found ? 0 : -ESRCH;
+}
+
+int kill(int pid, int sig) {
     if (sig < 0 || sig >= NSIG) {
         return -EINVAL;
     }
-    if (sig == 0) {
+    struct pcb *self = sched_current_proc();
+
+    if (pid > 0) {
+        struct pcb *p = proc_find((uint64_t)pid);
+        if (!p) {
+            return -ESRCH;
+        }
+        if (sig == 0) {
+            return 0;
+        }
+        sig_queue(p, sig);
         return 0;
     }
-    sig_queue(p, sig);
-    return 0;
+
+    if (pid == -1) {
+        if (!proc_list) {
+            return -ESRCH;
+        }
+        struct pcb *r = proc_list;
+        do {
+            sig_queue(r, sig);
+            r = r->next;
+        } while (r != proc_list);
+        return 0;
+    }
+
+    uint64_t pgid;
+    if (pid < 0) {
+        pgid = (uint64_t)(-pid);
+    } else {
+        if (!self) {
+            return -ESRCH;
+        }
+        pgid = self->pgid;
+    }
+    if (sig == 0) {
+        return proc_list ? 0 : -ESRCH;
+    }
+    return kill_group(pgid, sig);
 }
 
 int raise(int sig) {

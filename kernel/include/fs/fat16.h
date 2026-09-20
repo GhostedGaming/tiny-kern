@@ -30,4 +30,5 @@ uint8_t fat16_find_file(const void *vol_ptr, uint16_t dir_cluster, const char *n
 uint8_t fat16_create_dirent_update(const void *vol_ptr, uint16_t dir_cluster,
                                    const char *name, uint16_t start_cluster,
                                    uint32_t size);
+void fat16_free_cluster_chain(const void *vol_ptr, uint16_t start_cluster);
 uint32_t fat16_get_volume_id(const void *vol_ptr);

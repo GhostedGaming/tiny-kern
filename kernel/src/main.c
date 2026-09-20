@@ -63,6 +63,11 @@ static void enable_sse() {
 }
 
 static void init_thread_entry() {
+    int bin_rc = vfs_autmount_bins();
+    if (bin_rc != 0)
+        print("no FAT16 volume, /bins not mounted\n");
+    else
+        print("/bins auto-mounted from first FAT16 drive\n");
     jump_to_user(g_init_entry, g_init_rsp);
     print("jump_to_user returned\n");
     for (;;) asm volatile ("hlt");

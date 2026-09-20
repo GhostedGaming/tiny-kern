@@ -11,6 +11,7 @@
 #include <multitasking/sched.h>
 #include <multitasking/proc.h>
 #include <multitasking/thread.h>
+#include <abi/errno.h>
 
 #define GLYPH_W 8
 #define GLYPH_H 8
@@ -22,17 +23,17 @@ static tty_t   ttys[TTY_MAX];
 static uint8_t active_tty = 0;
 static void  (*global_output_fn)(tty_t *tty, char c) = NULL;
 
-static uint32_t *backbuf_storage = NULL;
-static uint32_t  backbuf_size = 0;
-
 static uint32_t *tty_fb(tty_t *tty) {
-    return tty->render_target ? tty->render_target :
-           (uint32_t *)framebuffer_request.response->framebuffers[0]->address;
+    return tty->backbuf;
 }
 
 static uint32_t tty_fb_stride(void) {
     return framebuffer_request.response->framebuffers[0]->pitch / 4;
 }
+
+static void tty_blit(tty_t *tty);
+static void tty_blit_region(tty_t *tty, uint32_t start_row, uint32_t end_row);
+static void tty_fill_cell(tty_t *tty, uint32_t row, uint32_t col, uint32_t color);
 
 static uint8_t tty_font[128][8] = {
     ['!'] = { 0x18, 0x3C, 0x3C, 0x18, 0x18, 0x00, 0x18, 0x00 },
@@ -149,6 +150,7 @@ static void tty_new_line(tty_t *tty) {
         memset(last_row, 0, row_bytes * sizeof(uint32_t));
 
         tty->row = tty->max_rows - 1;
+        tty_blit(tty);
     } else {
         tty->row++;
     }
@@ -179,6 +181,7 @@ void putchar(tty_t *tty, char c) {
         tty->col++;
     if (tty->col >= tty->max_cols)
             tty_new_line(tty);
+        tty_blit_region(tty, tty->row, tty->row);
         return;
     } else if (c == '\n') {
         tty_new_line(tty);
@@ -193,6 +196,8 @@ void putchar(tty_t *tty, char c) {
             tty->row--;
             tty->col = tty->max_cols - 1;
         }
+        tty_fill_cell(tty, tty->row, tty->col, tty->bg);
+        tty_blit_region(tty, tty->row, tty->row);
         return;
     }
 
@@ -223,6 +228,7 @@ void putchar(tty_t *tty, char c) {
     tty->col++;
     if (tty->col >= tty->max_cols)
         tty_new_line(tty);
+    tty_blit_region(tty, tty->row, tty->row);
 }
 
 static void tty_fill_cell(tty_t *tty, uint32_t row, uint32_t col, uint32_t color) {
@@ -258,12 +264,21 @@ static void tty_clear_line(tty_t *tty, int from, int to) {
         tty_fill_cell(tty, tty->row, (uint32_t)c, tty->bg);
 }
 
-static void tty_blit(tty_t *tty) {
+static void tty_blit_region(tty_t *tty, uint32_t start_row, uint32_t end_row) {
     if (!tty->backbuf) return;
     uint32_t stride = tty_fb_stride();
-    uint32_t fb_size = stride * framebuffer_request.response->framebuffers[0]->height;
     uint32_t *real_fb = (uint32_t *)framebuffer_request.response->framebuffers[0]->address;
-    memcpy(real_fb, tty->backbuf, fb_size * sizeof(uint32_t));
+    uint32_t start_y = tty->origin_y + start_row * GLYPH_H;
+    uint32_t end_y = tty->origin_y + (end_row + 1) * GLYPH_H;
+    if (end_y > framebuffer_request.response->framebuffers[0]->height)
+        end_y = framebuffer_request.response->framebuffers[0]->height;
+    uint32_t num_rows = end_y - start_y;
+    memcpy(&real_fb[start_y * stride], &tty->backbuf[start_y * stride],
+           num_rows * stride * sizeof(uint32_t));
+}
+
+static void tty_blit(tty_t *tty) {
+    tty_blit_region(tty, 0, tty->max_rows - 1);
 }
 
 static void tty_set_cursor(tty_t *tty, uint32_t row, uint32_t col) {
@@ -378,6 +393,7 @@ static void tty_esc_finish(tty_t *tty, char c) {
         default:
             break;
     }
+    tty_blit(tty);
     tty_esc_reset(tty);
 }
 
@@ -418,18 +434,7 @@ static void tty_esc_input(tty_t *tty, char c) {
             tty_esc_finish(tty, c);
         } else if ((c == 'l' || c == 'h') &&
                    tty->esc_nparam >= 0 && tty->esc_param[0] == 25) {
-            /* ESC[?25l = hide cursor → start back-buffer mode
-               ESC[?25h = show cursor → blit and end back-buffer mode */
-            if (c == 'l') {
-                if (tty->backbuf) {
-                    tty->backbuf_mode = 1;
-                    tty->render_target = tty->backbuf;
-                }
-            } else {
-                tty_blit(tty);
-                tty->backbuf_mode = 0;
-                tty->render_target = (uint32_t *)framebuffer_request.response->framebuffers[0]->address;
-            }
+            tty->backbuf_mode = (c == 'l') ? 1 : 0;
             tty_esc_reset(tty);
         } else {
             tty_esc_reset(tty);
@@ -471,33 +476,35 @@ static void tty_putchar_raw(tty_t *tty, char c) {
 }
 
 void tty_input(tty_t *tty, char c) {
+    if (c == '\r' || c == '\n' || c == 0x1b)
+        print("TTYIN c=0x%x iflag=0x%x lflag=0x%x\n", (unsigned)c, tty->termios.c_iflag, tty->termios.c_lflag);
     if (tty->termios.c_iflag & ICRNL && c == '\r')
         c = '\n';
 
     if (tty->termios.c_lflag & ISIG) {
         if (c == tty->termios.c_cc[VINTR]) {
-            if (tty->fg_pid) {
-                struct pcb *target = proc_find(tty->fg_pid);
-                if (target) sig_queue(target, SIGINT);
+            if (tty->fg_pgrp) {
+                kill(-(int)tty->fg_pgrp, SIGINT);
             }
+            tty->raw.head = tty->raw.tail = tty->raw.count = 0;
             if (tty->termios.c_lflag & ECHO)
                 tty_putchar_raw(tty, '\n');
             return;
         }
         if (c == tty->termios.c_cc[VQUIT]) {
-            if (tty->fg_pid) {
-                struct pcb *target = proc_find(tty->fg_pid);
-                if (target) sig_queue(target, SIGQUIT);
+            if (tty->fg_pgrp) {
+                kill(-(int)tty->fg_pgrp, SIGQUIT);
             }
+            tty->raw.head = tty->raw.tail = tty->raw.count = 0;
             if (tty->termios.c_lflag & ECHO)
                 tty_putchar_raw(tty, '\n');
             return;
         }
         if (c == tty->termios.c_cc[VSUSP]) {
-            if (tty->fg_pid) {
-                struct pcb *target = proc_find(tty->fg_pid);
-                if (target) sig_queue(target, SIGTSTP);
+            if (tty->fg_pgrp) {
+                kill(-(int)tty->fg_pgrp, SIGTSTP);
             }
+            tty->raw.head = tty->raw.tail = tty->raw.count = 0;
             if (tty->termios.c_lflag & ECHO)
                 tty_putchar_raw(tty, '\n');
             return;
@@ -518,17 +525,31 @@ void tty_input(tty_t *tty, char c) {
             return;
         }
 
-        if (tty->termios.c_lflag & ECHO)
-            tty_putchar_raw(tty, c);
-
-        ring_push(&tty->raw, (uint8_t)c);
-
-        if (c == '\n' || c == tty->termios.c_cc[VEOF]) {
+        if (c == '\n') {
+            if (tty->termios.c_lflag & ECHO)
+                tty_putchar_raw(tty, c);
+            ring_push(&tty->raw, (uint8_t)c);
+            tty->eof_pending = 0;
             uint8_t byte;
             while (ring_pop(&tty->raw, &byte))
                 ring_push(&tty->cooked, byte);
             tty_wake(tty);
+            return;
         }
+
+        if (c == tty->termios.c_cc[VEOF]) {
+            tty->eof_pending = 1;
+            uint8_t byte;
+            while (ring_pop(&tty->raw, &byte))
+                ring_push(&tty->cooked, byte);
+            tty_wake(tty);
+            return;
+        }
+
+        if (tty->termios.c_lflag & ECHO)
+            tty_putchar_raw(tty, c);
+
+        ring_push(&tty->raw, (uint8_t)c);
     } else {
         if (tty->termios.c_lflag & ECHO)
             tty_putchar_raw(tty, c);
@@ -555,10 +576,18 @@ int32_t tty_write(tty_t *tty, const uint8_t *buf, uint32_t count) {
 int32_t tty_read(tty_t *tty, uint8_t *buf, uint32_t count) {
     if (!tty || !buf || count == 0) return -1;
 
-    if (current_tcb && current_tcb->parent)
-        tty->fg_pid = current_tcb->parent->pid;
+    if (current_tcb && current_tcb->parent && tty->fg_pgrp == 0)
+        tty->fg_pgrp = current_tcb->parent->pgid;
 
     while (tty->cooked.count == 0) {
+        if (tty->eof_pending) {
+            tty->eof_pending = 0;
+            return 0;
+        }
+        struct pcb *p = current_tcb ? current_tcb->parent : NULL;
+        if (p && (p->sigstate.pending & ~p->sigstate.blocked)) {
+            return -EINTR;
+        }
         if (!current_tcb)
             return 0;
         asm volatile ("cli");
@@ -591,9 +620,14 @@ tty_t *tty_get(uint8_t index) {
 
 void tty_switch(uint8_t index) {
     if (index >= TTY_MAX) return;
+    ttys[active_tty].saved_render_target = ttys[active_tty].render_target;
     ttys[active_tty].active = 0;
     active_tty = index;
     ttys[active_tty].active = 1;
+    if (ttys[active_tty].saved_render_target) {
+        ttys[active_tty].render_target = ttys[active_tty].saved_render_target;
+    }
+    tty_blit(&ttys[active_tty]);
 }
 
 static ssize_t devfs_tty_read(devfs_dev_t *dev, void *buf, size_t count) {
@@ -624,11 +658,7 @@ void tty_init(void (*output_fn)(tty_t *tty, char c)) {
     uint32_t max_rows = (uint32_t)(fb->height / GLYPH_H);
 
     uint32_t fb_stride = fb->pitch / 4;
-    backbuf_size = fb_stride * fb->height;
-    backbuf_storage = (uint32_t *)kmalloc(backbuf_size * sizeof(uint32_t));
-    if (backbuf_storage) {
-        memset(backbuf_storage, 0, backbuf_size * sizeof(uint32_t));
-    }
+    uint32_t buf_size = fb_stride * fb->height;
 
     for (uint8_t i = 0; i < TTY_MAX; i++) {
         tty_t *t = &ttys[i];
@@ -641,9 +671,11 @@ void tty_init(void (*output_fn)(tty_t *tty, char c)) {
         t->termios.c_oflag = OPOST | ONLCR;
         t->termios.c_lflag = ECHO | ECHOE | ICANON | ISIG;
         t->termios.c_cc[VINTR]  = 0x03;
+        t->termios.c_cc[VQUIT]  = 0x1C;
         t->termios.c_cc[VERASE] = 0x7F;
         t->termios.c_cc[VKILL]  = 0x15;
         t->termios.c_cc[VEOF]   = 0x04;
+        t->termios.c_cc[VSUSP]  = 0x1A;
         t->termios.c_cc[VMIN]   = 1;
 
         t->putchar   = output_fn;
@@ -655,10 +687,13 @@ void tty_init(void (*output_fn)(tty_t *tty, char c)) {
         t->origin_y  = 0;
         t->fg        = 0xFFFFFFFF;
         t->bg        = 0x00000000;
-        t->backbuf      = backbuf_storage;
-        t->render_target = (uint32_t *)fb->address;
+        t->backbuf   = (uint32_t *)kmalloc(buf_size * sizeof(uint32_t));
+        if (t->backbuf)
+            memset(t->backbuf, 0, buf_size * sizeof(uint32_t));
+        t->render_target = t->backbuf;
+        t->saved_render_target = NULL;
         t->backbuf_mode = 0;
-        t->fg_pid = 0;
+        t->fg_pgrp = 0;
 
         char name[8];
         name[0] = 't'; name[1] = 't'; name[2] = 'y';
@@ -673,24 +708,49 @@ void tty_init(void (*output_fn)(tty_t *tty, char c)) {
 static void tty_cc_kernel_to_user(const uint8_t *k, uint8_t *u) {
     for (int i = 0; i < 32; i++) u[i] = 0;
     u[0] = k[0];
-    u[1] = 0;
+    u[1] = k[1];
     u[2] = k[2];
     u[3] = k[3];
     u[4] = k[4];
     u[5] = k[6];
     u[6] = k[5];
     u[7] = k[7];
+    u[10] = k[10];
 }
 
 static void tty_cc_user_to_kernel(const uint8_t *u, uint8_t *k) {
     for (int i = 0; i < 8; i++) k[i] = 0;
     k[0] = u[0];
+    k[1] = u[1];
     k[2] = u[2];
     k[3] = u[3];
     k[4] = u[4];
     k[5] = u[6];
     k[6] = u[5];
     k[7] = u[7];
+    k[10] = u[10];
+    k[8] = 0;
+    k[9] = 0;
+}
+
+int tty_ioctl(devfs_dev_t *dev, unsigned long req, void *arg) {
+    (void)dev;
+    tty_t *tty = tty_get_active();
+    if (!tty || !arg) {
+        return -1;
+    }
+    switch (req) {
+        case TIOCGPGRP:
+            *(int *)arg = (int)tty->fg_pgrp;
+            return 0;
+        case TIOCSPGRP: {
+            int pgrp = *(int *)arg;
+            tty->fg_pgrp = (uint64_t)pgrp;
+            return 0;
+        }
+        default:
+            return -1;
+    }
 }
 
 int tty_getattr(tty_t *tty, struct termios_user *u) {
@@ -710,6 +770,7 @@ int tty_getattr(tty_t *tty, struct termios_user *u) {
 int tty_setattr(tty_t *tty, const struct termios_user *u) {
     if (!tty || !u) return -1;
 
+    print("TTYSET iflag=0x%x lflag=0x%x\n", u->c_iflag, u->c_lflag);
     tty->termios.c_iflag = u->c_iflag;
     tty->termios.c_oflag = u->c_oflag;
     tty->termios.c_lflag = u->c_lflag;

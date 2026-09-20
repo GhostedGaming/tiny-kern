@@ -18,6 +18,8 @@
 typedef int pid_t;
 
 #define WNOHANG 1
+#define WUNTRACED 2
+#define WCONTINUED 8
 
 #define USER_HEAP_START 0x0000600000000000UL
 #define USER_STACK_TOP 0x0000700000000000UL
@@ -207,6 +209,7 @@ void _exit(uint64_t exit_code) {
     struct pcb *p = sched_current_proc();
     if (p) {
         p->exit_code = exit_code;
+        p->wait_events |= WAIT_EVT_EXITED;
         if (p->ppcb) {
             sig_queue(p->ppcb, SIGCHLD);
             if (!p->ppcb->stopped) {
@@ -255,6 +258,7 @@ pid_t fork() {
     asm volatile ("fxsave %0" : : "m"(*(uint8_t (*)[512])cfpu) : "memory");
 
     cp->pid = ++proc_count;
+    cp->pgid = p->pgid;
     cp->t_count = 1;
     cp->addr_space = address_space;
     cp->t = NULL;
@@ -263,6 +267,8 @@ pid_t fork() {
     cp->exit_code = 0;
     cp->stopped = p->stopped;
     cp->is_zombie = 0;
+    cp->wait_events = 0;
+    cp->wait_stop_sig = 0;
     cp->z_prev = NULL;
     cp->z_next = NULL;
     cp->ppcb = p;
@@ -293,10 +299,6 @@ pid_t fork() {
 
     uint64_t *sp = (uint64_t *)(kstack + KSTACK_SIZE);
     uint64_t *src = (uint64_t *)current_tcb->kstack_top;
-
-    for (int i = 0; i < 22; i++) {
-        print("STK[-%d] = %016lx\n", i + 1, src[-(i + 1)]);
-    }
 
     sp -= 22;
     sp[0] = src[-21];
@@ -343,7 +345,6 @@ pid_t fork() {
     cp->t = ct;
     ct->proc_next = ct;
 
-    print("FORK parent=%d child=%d (tid %d)\n", p->pid, cp->pid, ct->tid);
     return (pid_t)cp->pid;
 }
 
@@ -357,20 +358,17 @@ int execve(const char *path, char *const argv[], char *const envp[]) {
 
     struct exec_args args;
     if (snapshot_exec_args(path, argv, envp, &args)) {
-        print("EXECVE fail: snapshot\n");
         return -1;
     }
 
     int fd = open(args.path, O_RDONLY);
     if (fd < 0) {
-        print("EXECVE fail: open %s\n", args.path);
         return -1;
     }
 
     uintptr_t new_pml4 = paging_create_pml4();
     if (!new_pml4) {
         close(fd);
-        print("EXECVE fail: create_pml4\n");
         return -1;
     }
 
@@ -378,7 +376,6 @@ int execve(const char *path, char *const argv[], char *const envp[]) {
     uint64_t entry = elf64_parse(fd, new_pml4, &info);
     close(fd);
     if (!entry) {
-        print("EXECVE fail: elf\n");
         paging_destroy_address_space(new_pml4);
         return -1;
     }
@@ -396,7 +393,6 @@ int execve(const char *path, char *const argv[], char *const envp[]) {
         reload_cr3(p->addr_space);
         asm volatile ("sti");
         paging_destroy_address_space(new_pml4);
-        print("EXECVE fail: setup_stack\n");
         return -1;
     }
 
@@ -430,19 +426,6 @@ int execve(const char *path, char *const argv[], char *const envp[]) {
     sp[16] = (uint64_t)jump_to_user;
     current_tcb->ksp = sp;
 
-    print("EXECVE pid=%d jump_to_user entry=%lx stack=%lx\n", p->pid, (unsigned long)entry, (unsigned long)stack_top);
-
-    extern volatile struct limine_framebuffer_request framebuffer_request;
-    if (framebuffer_request.response && framebuffer_request.response->framebuffer_count > 0) {
-        uint64_t fbaddr = (uint64_t)framebuffer_request.response->framebuffers[0]->address;
-        uint64_t fbidx = (fbaddr >> 39) & 0x1FF;
-        uint64_t *np4 = phys_to_virt(new_pml4);
-        uint64_t *kp4 = phys_to_virt((uintptr_t)kernel_pml4);
-        print("EXECVE fbaddr=%lx fbidx=%lu newpml4_ent=%lx kernpml4_ent=%lx newpml4=%lx\n",
-              (unsigned long)fbaddr, (unsigned long)fbidx, (unsigned long)np4[fbidx],
-              (unsigned long)kp4[fbidx], (unsigned long)new_pml4);
-    }
-
     exec_switch_resume(sp);
 
     return -1;
@@ -468,6 +451,50 @@ int pause() {
     return -1;
 }
 
+static int child_is_mine(struct pcb *p, struct pcb *c) {
+    return c && c->ppcb == p;
+}
+
+static int child_event_requested(struct pcb *c, int options) {
+    if (c->wait_events & WAIT_EVT_EXITED) return 1;
+    if ((c->wait_events & WAIT_EVT_STOPPED) && (options & WUNTRACED)) return 1;
+    if ((c->wait_events & WAIT_EVT_CONTINUED) && (options & WCONTINUED)) return 1;
+    return 0;
+}
+
+static struct pcb *find_waitable_child(struct pcb *p, int pid, int options) {
+    if (pid > 0) {
+        struct pcb *c = proc_find((uint64_t)pid);
+        if (!c) return NULL;
+        return child_is_mine(p, c) && child_event_requested(c, options) ? c : NULL;
+    }
+
+    if (!proc_list) return NULL;
+
+    struct pcb *r = proc_list;
+    do {
+        if (child_is_mine(p, r)) {
+            if (pid == -1 || pid == 0) {
+                if (child_event_requested(r, options)) return r;
+            } else if (pid < -1 && r->pgid == (uint64_t)(-pid)) {
+                if (child_event_requested(r, options)) return r;
+            }
+        }
+        r = r->next;
+    } while (r != proc_list);
+    return NULL;
+}
+
+static int parent_has_any_child(struct pcb *p) {
+    if (p == NULL || proc_list == NULL) return 0;
+    struct pcb *r = proc_list;
+    do {
+        if (child_is_mine(p, r)) return 1;
+        r = r->next;
+    } while (r != proc_list);
+    return 0;
+}
+
 int waitpid(int pid, int *status, int options) {
     struct pcb *p = sched_current_proc();
     if (!p) {
@@ -476,54 +503,51 @@ int waitpid(int pid, int *status, int options) {
     }
 
     for (;;) {
-        struct pcb *child = NULL;
-
         if (pid > 0) {
             struct pcb *c = proc_find((uint64_t)pid);
-            if (c && c->ppcb == p && c->is_zombie) {
-                child = c;
-            } else if (!c || c->ppcb != p) {
-                errno = ESRCH;
+            if (!c || !child_is_mine(p, c)) {
+                errno = ECHILD;
                 return -1;
             }
-        } else if (pid == -1) {
-            for (struct pcb *z = zombie_head; z; z = z->z_next) {
-                if (z->ppcb == p) {
-                    child = z;
-                    break;
-                }
-            }
-        } else {
-            errno = EINVAL;
-            return -1;
         }
 
+        struct pcb *child = find_waitable_child(p, pid, options);
+
         if (child) {
-            if (status) {
-                *status = (int)child->exit_code;
-            }
             uint64_t cpid = child->pid;
-            proc_destroy(child);
-            return (int)cpid;
+
+            if (child->wait_events & WAIT_EVT_EXITED) {
+                if (status) {
+                    *status = (int)((unsigned)(child->exit_code & 0xff) << 8);
+                }
+                child->wait_events &= ~WAIT_EVT_EXITED;
+                proc_destroy(child);
+                return (int)cpid;
+            }
+
+            if ((child->wait_events & WAIT_EVT_STOPPED) && (options & WUNTRACED)) {
+                child->wait_events &= ~WAIT_EVT_STOPPED;
+                if (status) {
+                    *status = (int)((unsigned)(child->wait_stop_sig & 0xff) << 8) | 0x7f;
+                }
+                return (int)cpid;
+            }
+
+            if ((child->wait_events & WAIT_EVT_CONTINUED) && (options & WCONTINUED)) {
+                child->wait_events &= ~WAIT_EVT_CONTINUED;
+                if (status) {
+                    *status = 0xffff;
+                }
+                return (int)cpid;
+            }
         }
 
         if (options & WNOHANG) {
             return 0;
         }
 
-        if (pid == -1) {
-            int has_child = 0;
-            if (proc_list) {
-                struct pcb *r = proc_list;
-                do {
-                    if (r->ppcb == p) {
-                        has_child = 1;
-                        break;
-                    }
-                    r = r->next;
-                } while (r != proc_list);
-            }
-            if (!has_child) {
+        if (pid <= 0) {
+            if (!parent_has_any_child(p)) {
                 errno = ECHILD;
                 return -1;
             }
@@ -531,4 +555,45 @@ int waitpid(int pid, int *status, int options) {
 
         block_current();
     }
+}
+
+int setpgid(pid_t pid, pid_t pgid) {
+    struct pcb *p = sched_current_proc();
+    if (!p) {
+        return -ESRCH;
+    }
+    if (pid == 0) {
+        pid = (pid_t)p->pid;
+    }
+    struct pcb *target = proc_find((uint64_t)pid);
+    if (!target) {
+        return -ESRCH;
+    }
+    if (pgid == 0) {
+        pgid = pid;
+    }
+    if (pgid < 0 || pgid == 1) {
+        return -EINVAL;
+    }
+    target->pgid = (uint64_t)pgid;
+    return 0;
+}
+
+pid_t getpgid(pid_t pid) {
+    struct pcb *p = sched_current_proc();
+    if (!p) {
+        return -ESRCH;
+    }
+    if (pid == 0) {
+        pid = (pid_t)p->pid;
+    }
+    struct pcb *target = proc_find((uint64_t)pid);
+    if (!target) {
+        return -ESRCH;
+    }
+    return (pid_t)target->pgid;
+}
+
+pid_t getpgrp(void) {
+    return getpgid(0);
 }

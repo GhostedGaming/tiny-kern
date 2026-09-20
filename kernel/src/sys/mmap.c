@@ -9,6 +9,7 @@
 #include <multitasking/proc.h>
 #include <multitasking/sched.h>
 #include <mm/mmap.h>
+#include <fs/devfs.h>
 
 #define MMAP_ADDR_MASK 0x000FFFFFFFFFF000ULL
 
@@ -33,8 +34,50 @@ intptr_t sys_mmap(uintptr_t addr, size_t len, int prot, int flags, int fd, off_t
     struct pcb *p = sched_current_proc();
     if (!p) return -1;
     if (len == 0) return -EINVAL;
-    if (!(flags & MAP_ANONYMOUS)) return -EINVAL;
     if (flags & MAP_FIXED) return -EINVAL;
+
+    if ((flags & MAP_SHARED) && !(flags & MAP_ANONYMOUS) && fd >= 0) {
+        size_t pages = (len + PAGE_SIZE - 1) / PAGE_SIZE;
+        size_t map_len = pages * PAGE_SIZE;
+
+        uintptr_t va;
+        if (addr != 0) {
+            va = (addr + PAGE_SIZE - 1) & ~((uintptr_t)PAGE_SIZE - 1);
+        } else {
+            va = p->mmap_cursor;
+        }
+
+        if (!p->fd_table[fd]) return -EINVAL;
+        vfs_node_t *node = p->fd_table[fd]->node;
+        if (!node || node->type != VFS_NODE_DEV || !node->priv) return -EINVAL;
+
+        devfs_dev_t *dev = (devfs_dev_t *)node->priv;
+        fb_info_t *fb = (fb_info_t *)dev->priv;
+        if (fb->phys == 0 || map_len > fb->size) return -EINVAL;
+
+        uint64_t f = PAGE_PRESENT | PAGE_USER;
+        if (prot & PROT_WRITE) f |= PAGE_WRITABLE;
+
+        for (size_t i = 0; i < pages; i++) {
+            uintptr_t pa = fb->phys + i * PAGE_SIZE;
+            paging_map_page((uint64_t *)p->addr_space, (void *)(va + i * PAGE_SIZE), pa, f);
+        }
+
+        struct mmap_region *r = (struct mmap_region *)kmalloc(sizeof(struct mmap_region));
+        if (!r) return -ENOMEM;
+        r->base = va;
+        r->len = map_len;
+        r->prot = (uint32_t)prot;
+        r->next = p->mmaps;
+        p->mmaps = r;
+
+        if (addr == 0) {
+            p->mmap_cursor = va + map_len;
+        }
+        return (intptr_t)va;
+    }
+
+    if (!(flags & MAP_ANONYMOUS)) return -EINVAL;
 
     size_t pages = (len + PAGE_SIZE - 1) / PAGE_SIZE;
     size_t map_len = pages * PAGE_SIZE;

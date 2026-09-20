@@ -4,12 +4,12 @@
 #include <logging/print.h>
 #include <apic.h>
 #include <mm/page.h>
-#include <idt.h>
 #include <signal.h>
 #include <multitasking/sched.h>
 #include <multitasking/thread.h>
 #include <multitasking/proc.h>
 #include <tty.h>
+#include <idt.h>
 
 #define IDT_MAX_DESCRIPTORS 256
 
@@ -129,16 +129,36 @@ void exception_handler(uint64_t vector, uint64_t error_code, user_context_t *ctx
                   p ? p->pid : -1, (unsigned long)vector, (unsigned long)ctx->rip,
                   (unsigned long)ctx->rbx, (unsigned long)cr2_v,
                   (unsigned long)current_tcb->fs_base, (unsigned long)(msr_fs & 0xFFFFFFFFFFFFFFFF), sig);
+            {
+                unsigned char *ip = (unsigned char *)(uintptr_t)ctx->rip;
+                print("FAULTBYTES pre");
+                for (int i = -16; i < 0; i++) {
+                    print(" %02x", (unsigned int)ip[i]);
+                }
+                print(" post");
+                for (int i = 0; i < 24; i++) {
+                    print(" %02x", (unsigned int)ip[i]);
+                }
+                print(" rcx=%lx rdx=%lx rsi=%lx rdi=%lx r8=%lx r9=%lx r10=%lx r11=%lx rax=%lx rbp=%lx rsp=%lx r12=%lx r13=%lx r14=%lx r15=%lx\n",
+                      (unsigned long)ctx->rcx, (unsigned long)ctx->rdx,
+                      (unsigned long)ctx->rsi, (unsigned long)ctx->rdi,
+                      (unsigned long)ctx->r8, (unsigned long)ctx->r9,
+                      (unsigned long)ctx->r10, (unsigned long)ctx->r11,
+                      (unsigned long)ctx->rax, (unsigned long)ctx->rbp,
+                      (unsigned long)ctx->rsp, (unsigned long)ctx->r12,
+                      (unsigned long)ctx->r13, (unsigned long)ctx->r14,
+                      (unsigned long)ctx->r15);
+            }
             if (p) {
                 sigset_t bit = (sigset_t)1 << (sig - 1);
                 if (p->sigstate.blocked & bit) {
                     p->sigstate.pending |= bit;
                 } else {
-                    sig_deliver(p, sig, ctx);
+                    sig_deliver(p, sig, ctx, ctx->rax);
                 }
             }
         }
-        sig_deliver_current(ctx);
+        sig_deliver_current(ctx, ctx->rax);
         return;
     }
 

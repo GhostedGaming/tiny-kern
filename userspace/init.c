@@ -94,14 +94,7 @@ int main(int argc, char *argv[]) {
         report("open/fstat", 0);
     }
 
-    spawn("/ram/bin/user_idle", "user_idle");
-    spawn("/ram/bin/sig_test", "sig_test");
-    spawn("/ram/bin/syscall_test", "syscall_test");
-    spawn("/ram/bin/all_test", "all_test");
-
     spawn("/ram/bin/sh", "sh");
-
-    spawn("/ram/bin/tcc_link", "tcc_link");
 
     printf("init: reaping children\n");
     for (;;) {

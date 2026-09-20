@@ -50,8 +50,12 @@
 #define SYS_UNLINKAT        47
 #define SYS_MKFS            48
 #define SYS_PIPE            49
+#define SYS_IOCTL           50
+#define SYS_SETPGID          51
+#define SYS_GETPGID          52
+#define SYS_GETPGRP          53
 
-#define SYS_MAX             50
+#define SYS_MAX             54
 
 #define ARCH_SET_FS         1
 #define ARCH_GET_FS         2

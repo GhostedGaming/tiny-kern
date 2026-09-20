@@ -203,7 +203,7 @@ static uint16_t fat16_allocate_cluster(const fat_node *vol) {
     return 0;
 }
 
-static void fat16_free_cluster_chain(const fat_node *vol, uint16_t start_cluster) {
+static void fat16_free_cluster_chain_internal(const fat_node *vol, uint16_t start_cluster) {
     uint16_t current = start_cluster;
     while (current >= 2 && current < FAT16_CLUSTER_BAD) {
         uint16_t next = fat16_get_next_cluster(vol, current);
@@ -246,79 +246,270 @@ static void fat16_read_dirent(struct fat16_dirent *dirent, char *name, size_t na
     }
 }
 
-static void fat16_write_dirent_name(struct fat16_dirent *dirent, const char *name) {
-    memset(dirent->name, ' ', 8);
-    memset(dirent->ext, ' ', 3);
-    
-    const char *dot = 0;
-    for (const char *p = name; *p; p++) {
-        if (*p == '.') {
-            dot = p;
-        }
+static uint32_t fat16_root_dir_sectors(const fat_node *vol) {
+    return (vol->data.bpb.rec * 32 + vol->data.bpb.bps - 1) / vol->data.bpb.bps;
+}
+
+static uint32_t fat16_dir_entries_per_sector(const fat_node *vol) {
+    return vol->data.bpb.bps / 32;
+}
+
+static uint32_t fat16_dir_entries_per_cluster(const fat_node *vol) {
+    return fat16_dir_entries_per_sector(vol) * vol->data.bpb.spc;
+}
+
+static uint8_t fat16_dir_entry_location(const fat_node *vol, uint16_t dir_cluster,
+                                        uint32_t idx, uint32_t *sector, uint16_t *in_sector) {
+    uint32_t eps = fat16_dir_entries_per_sector(vol);
+    uint32_t epc = fat16_dir_entries_per_cluster(vol);
+
+    if (dir_cluster == 0) {
+        if (idx / eps >= fat16_root_dir_sectors(vol))
+            return 1;
+        *sector = vol->data.bpb.rsc + vol->data.bpb.num_fats * vol->data.bpb.fat_s
+                + idx / eps;
+        *in_sector = idx % eps;
+        return 0;
     }
-    
-    if (dot) {
-        size_t name_part_len = dot - name;
-        if (name_part_len > 8) {
-            name_part_len = 8;
-        }
-        memcpy(dirent->name, name, name_part_len);
-        
-        const char *ext = dot + 1;
-        size_t ext_len = 0;
-        for (; ext[ext_len] && ext_len < 3; ext_len++);
-        memcpy(dirent->ext, ext, ext_len);
-    } else {
-        size_t name_len = 0;
-        for (; name[name_len] && name_len < 8; name_len++);
-        memcpy(dirent->name, name, name_len);
+
+    uint16_t cluster = dir_cluster;
+    uint32_t advance = idx / epc;
+    for (uint32_t i = 0; i < advance; i++) {
+        uint16_t next = fat16_get_next_cluster(vol, cluster);
+        if (next < 2 || next >= FAT16_CLUSTER_BAD)
+            return 1;
+        cluster = next;
+    }
+
+    uint32_t within_cluster = idx % epc;
+    *sector = fat16_get_cluster_sector(vol, cluster) + within_cluster / eps;
+    *in_sector = within_cluster % eps;
+    return 0;
+}
+
+static uint8_t fat16_read_dirent_index(const fat_node *vol, uint16_t dir_cluster,
+                                       uint32_t idx, struct fat16_dirent *entry) {
+    uint32_t sector;
+    uint16_t in_sector;
+    if (fat16_dir_entry_location(vol, dir_cluster, idx, &sector, &in_sector) != 0)
+        return 1;
+
+    uint64_t phys = frame_alloc();
+    if (!phys)
+        return 2;
+    uint8_t *buffer = (uint8_t *)phys_to_virt(phys);
+
+    if (((fat_node *)vol)->blockdev.read(&((fat_node *)vol)->blockdev, sector, 1, buffer) != 0) {
+        frame_free(phys);
+        return 3;
+    }
+
+    memcpy(entry, buffer + in_sector * 32, 32);
+    frame_free(phys);
+    return 0;
+}
+
+static uint8_t fat16_write_dirent_index(const fat_node *vol, uint16_t dir_cluster,
+                                        uint32_t idx, const struct fat16_dirent *entry) {
+    uint32_t sector;
+    uint16_t in_sector;
+    if (fat16_dir_entry_location(vol, dir_cluster, idx, &sector, &in_sector) != 0)
+        return 1;
+
+    uint64_t phys = frame_alloc();
+    if (!phys)
+        return 2;
+    uint8_t *buffer = (uint8_t *)phys_to_virt(phys);
+
+    if (((fat_node *)vol)->blockdev.read(&((fat_node *)vol)->blockdev, sector, 1, buffer) != 0) {
+        frame_free(phys);
+        return 3;
+    }
+
+    memcpy(buffer + in_sector * 32, entry, 32);
+
+    if (((fat_node *)vol)->blockdev.write(&((fat_node *)vol)->blockdev, sector, 1, buffer) != 0) {
+        frame_free(phys);
+        return 4;
+    }
+
+    frame_free(phys);
+    return 0;
+}
+
+static uint16_t fat16_get_ucs2(const uint8_t *p) {
+    return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
+}
+
+static void fat16_put_ucs2(uint8_t *p, uint16_t c) {
+    p[0] = c & 0xFF;
+    p[1] = c >> 8;
+}
+
+static int fat16_name_iequal(const char *a, const char *b) {
+    for (;;) {
+        char ca = *a;
+        char cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb)
+            return 0;
+        if (ca == 0)
+            return 1;
+        a++;
+        b++;
     }
 }
 
-static struct fat16_dirent *fat16_find_dirent(const fat_node *vol, uint16_t dir_cluster, const char *name, struct fat16_dirent *result) {
-    uint16_t current = dir_cluster;
-    uint64_t phys = frame_alloc();
-    if (!phys) {
-        return NULL;
+static uint8_t fat16_lfn_checksum(const uint8_t *short_name) {
+    uint8_t sum = 0;
+    for (int i = 0; i < 11; i++)
+        sum = (uint8_t)(((sum & 1) << 7) + (sum >> 1) + short_name[i]);
+    return sum;
+}
+
+static uint32_t fat16_lfn_count(const char *name) {
+    return ((uint32_t)strlen(name) + 12) / 13;
+}
+
+static void fat16_short_name(const char *name, uint8_t *short_name) {
+    const char *dot = 0;
+    for (const char *p = name; *p; p++) {
+        if (*p == '.') dot = p;
     }
-    
-    uint8_t *buffer = (uint8_t *)phys_to_virt(phys);
-    
-    while (current >= 2 && current < FAT16_CLUSTER_BAD) {
-        if (fat16_read_cluster(vol, current, buffer) != 0) {
-            frame_free(phys);
-            return NULL;
+
+    size_t base_len = dot ? (size_t)(dot - name) : (size_t)strlen(name);
+    size_t ext_len = dot ? strlen(dot + 1) : 0;
+
+    memset(short_name, ' ', 11);
+    for (size_t i = 0; i < base_len && i < 8; i++) {
+        char c = name[i];
+        if (c >= 'a' && c <= 'z') c -= 32;
+        short_name[i] = c;
+    }
+    for (size_t i = 0; i < ext_len && i < 3; i++) {
+        char c = dot[i + 1];
+        if (c >= 'a' && c <= 'z') c -= 32;
+        short_name[8 + i] = c;
+    }
+}
+
+static size_t fat16_lfn_decode(const struct fat16_dirent *entries, int count,
+                               char *out, size_t out_size) {
+    size_t pos = 0;
+    for (int i = count - 1; i >= 0; i--) {
+        const struct fat16_dirent *e = &entries[i];
+        const uint8_t *p = e->name;
+
+        uint16_t chars[13];
+        chars[0]  = fat16_get_ucs2(p + 1);
+        chars[1]  = fat16_get_ucs2(p + 3);
+        chars[2]  = fat16_get_ucs2(p + 5);
+        chars[3]  = fat16_get_ucs2(&e->name[7]);
+        chars[4]  = fat16_get_ucs2(&e->ext[1]);
+        chars[5]  = e->crtime;
+        chars[6]  = e->crdate;
+        chars[7]  = e->ladate;
+        chars[8]  = e->cluster_high;
+        chars[9]  = e->wtime;
+        chars[10] = e->wdate;
+        chars[11] = e->size & 0xFFFF;
+        chars[12] = e->size >> 16;
+
+        for (int j = 0; j < 13; j++) {
+            uint16_t c = chars[j];
+            if (c == 0xFFFF || c == 0) {
+                if (pos < out_size)
+                    out[pos] = '\0';
+                return pos;
+            }
+            if (pos + 1 >= out_size)
+                return pos;
+            out[pos++] = (char)(c & 0x7F);
         }
-        
-        for (int i = 0; i < vol->data.bpb.bps / 32; i++) {
-            struct fat16_dirent *entry = (struct fat16_dirent *)(buffer + i * 32);
-            
-            if (entry->name[0] == 0) {
-                frame_free(phys);
-                return NULL;
+    }
+    if (pos < out_size)
+        out[pos] = '\0';
+    return pos;
+}
+
+static void fat16_lfn_encode(struct fat16_dirent *e, uint8_t seq, uint8_t checksum,
+                             const char *name, size_t offset) {
+    size_t len = strlen(name);
+    uint16_t chars[13];
+
+    memset(e, 0, sizeof(*e));
+    for (int i = 0; i < 13; i++) {
+        size_t ci = offset + (size_t)i;
+        chars[i] = (ci < len) ? (uint16_t)(uint8_t)name[ci] : 0xFFFF;
+    }
+
+    e->name[0] = seq;
+    fat16_put_ucs2(e->name + 1, chars[0]);
+    fat16_put_ucs2(e->name + 3, chars[1]);
+    fat16_put_ucs2(e->name + 5, chars[2]);
+    fat16_put_ucs2(&e->name[7], chars[3]);
+    fat16_put_ucs2(&e->ext[1], chars[4]);
+    e->attr = FAT16_ATTR_LFN;
+    e->reserved = 0;
+    e->crtime_tenths = checksum;
+    e->crtime = chars[5];
+    e->crdate = chars[6];
+    e->ladate = chars[7];
+    e->cluster_high = chars[8];
+    e->wtime = chars[9];
+    e->wdate = chars[10];
+    e->cluster_low = 0;
+    e->size = (chars[11] & 0xFFFF) | ((uint32_t)(chars[12] & 0xFFFF) << 16);
+}
+
+static struct fat16_dirent *fat16_find_dirent(const fat_node *vol, uint16_t dir_cluster, const char *name, struct fat16_dirent *result) {
+    for (uint32_t idx = 0; idx < 65536; idx++) {
+        struct fat16_dirent entry;
+        if (fat16_read_dirent_index(vol, dir_cluster, idx, &entry) != 0)
+            return NULL;
+        if (entry.name[0] == 0)
+            return NULL;
+
+        if (entry.attr == FAT16_ATTR_LFN) {
+            struct fat16_dirent lfn_entries[21];
+            int count = 0;
+            uint32_t k = idx;
+            while (count < 21) {
+                struct fat16_dirent e;
+                if (fat16_read_dirent_index(vol, dir_cluster, k, &e) != 0)
+                    break;
+                if (e.attr != FAT16_ATTR_LFN)
+                    break;
+                lfn_entries[count++] = e;
+                k++;
             }
-            
-            if (entry->name[0] == 0xE5) {
-                continue;
-            }
-            if (entry->attr == FAT16_ATTR_LFN) {
-                continue;
-            }
-            
-            char entry_name[256];
-            fat16_read_dirent(entry, entry_name, sizeof(entry_name));
-            
-            if (strcmp(entry_name, name) == 0) {
-                memcpy(result, entry, sizeof(struct fat16_dirent));
-                frame_free(phys);
+
+            char long_name[256];
+            size_t long_len = fat16_lfn_decode(lfn_entries, count, long_name, sizeof(long_name));
+            if (long_len > 0 && strcmp(long_name, name) == 0) {
+                struct fat16_dirent short_entry;
+                if (fat16_read_dirent_index(vol, dir_cluster, k, &short_entry) != 0)
+                    return NULL;
+                memcpy(result, &short_entry, sizeof(struct fat16_dirent));
                 return result;
             }
+            idx = k;
+            continue;
         }
-        
-        current = fat16_get_next_cluster(vol, current);
+
+        if (entry.name[0] == 0xE5)
+            continue;
+
+        char entry_name[256];
+        fat16_read_dirent(&entry, entry_name, sizeof(entry_name));
+
+        if (fat16_name_iequal(entry_name, name)) {
+            memcpy(result, &entry, sizeof(struct fat16_dirent));
+            return result;
+        }
     }
-    
-    frame_free(phys);
+
     return NULL;
 }
 
@@ -397,134 +588,159 @@ static uint8_t fat16_write_file_core(const fat_node *vol, uint16_t *start_cluste
     return 0;
 }
 
+static uint8_t fat16_find_entry_index(const fat_node *vol, uint16_t dir_cluster, const char *name, uint32_t *index) {
+    for (uint32_t idx = 0; idx < 65536; idx++) {
+        struct fat16_dirent entry;
+        if (fat16_read_dirent_index(vol, dir_cluster, idx, &entry) != 0)
+            return 1;
+        if (entry.name[0] == 0)
+            return 1;
+
+        if (entry.attr == FAT16_ATTR_LFN) {
+            struct fat16_dirent lfn_entries[21];
+            int count = 0;
+            uint32_t k = idx;
+            while (count < 21) {
+                struct fat16_dirent e;
+                if (fat16_read_dirent_index(vol, dir_cluster, k, &e) != 0)
+                    break;
+                if (e.attr != FAT16_ATTR_LFN)
+                    break;
+                lfn_entries[count++] = e;
+                k++;
+            }
+
+            char long_name[256];
+            size_t long_len = fat16_lfn_decode(lfn_entries, count, long_name, sizeof(long_name));
+            if (long_len > 0 && fat16_name_iequal(long_name, name)) {
+                *index = k;
+                return 0;
+            }
+            idx = k;
+            continue;
+        }
+
+        if (entry.name[0] == 0xE5)
+            continue;
+
+        char entry_name[256];
+        fat16_read_dirent(&entry, entry_name, sizeof(entry_name));
+
+        if (fat16_name_iequal(entry_name, name)) {
+            *index = idx;
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
 static uint8_t fat16_create_dirent(const fat_node *vol, uint16_t dir_cluster, const char *name, uint8_t attr, uint16_t start_cluster, uint32_t size) {
-    uint64_t phys = frame_alloc();
-    if (!phys) {
-        return 1;
-    }
-    
-    uint8_t *buffer = (uint8_t *)phys_to_virt(phys);
-    uint16_t current = dir_cluster;
-    uint16_t free_cluster = 0;
-    int free_index = -1;
-    
-    while (current >= 2 && current < FAT16_CLUSTER_BAD) {
-        if (fat16_read_cluster(vol, current, buffer) != 0) {
-            frame_free(phys);
-            return 2;
-        }
-        
-        for (int i = 0; i < vol->data.bpb.bps / 32; i++) {
-            struct fat16_dirent *entry = (struct fat16_dirent *)(buffer + i * 32);
-            
-            if (entry->name[0] == 0 || entry->name[0] == 0xE5) {
-                if (free_index == -1) {
-                    free_cluster = current;
-                    free_index = i;
-                }
+    uint8_t short_name[11];
+    fat16_short_name(name, short_name);
+    uint32_t n_lfn = fat16_lfn_count(name);
+    uint32_t need = n_lfn + 1;
+
+    for (uint32_t idx = 0; idx < 65536;) {
+        struct fat16_dirent entry;
+        int read = fat16_read_dirent_index(vol, dir_cluster, idx, &entry);
+        if (read != 0) {
+            if (dir_cluster == 0)
+                return 7;
+            uint16_t last = dir_cluster;
+            uint16_t nxt;
+            while ((nxt = fat16_get_next_cluster(vol, last)) >= 2 && nxt < FAT16_CLUSTER_BAD)
+                last = nxt;
+            uint16_t new_cluster = fat16_allocate_cluster(vol);
+            if (!new_cluster)
+                return 8;
+            if (fat16_set_next_cluster(vol, last, new_cluster) != 0) {
+                fat16_free_cluster_chain(vol, new_cluster);
+                return 9;
             }
-        }
-        
-        if (free_index != -1) {
-            break;
-        }
-        current = fat16_get_next_cluster(vol, current);
-    }
-    
-    if (free_index == -1) {
-        uint16_t new_cluster = fat16_allocate_cluster(vol);
-        if (!new_cluster) {
-            frame_free(phys);
-            return 3;
-        }
-        
-        if (current >= 2 && current < FAT16_CLUSTER_BAD) {
-            if (fat16_set_next_cluster(vol, current, new_cluster) != 0) {
-                frame_free(phys);
-                return 4;
+            uint64_t zphys = frame_alloc();
+            if (!zphys) {
+                fat16_free_cluster_chain(vol, new_cluster);
+                return 12;
             }
+            uint8_t *zbuf = (uint8_t *)phys_to_virt(zphys);
+            memset(zbuf, 0, vol->data.bpb.spc * vol->data.bpb.bps);
+            fat16_write_cluster(vol, new_cluster, zbuf);
+            frame_free(zphys);
+        } else if (entry.name[0] != 0 && entry.name[0] != 0xE5) {
+            idx++;
+            continue;
         }
-        
-        memset(buffer, 0, vol->data.bpb.spc * vol->data.bpb.bps);
-        free_cluster = new_cluster;
-        free_index = 0;
+
+        uint32_t start = idx;
+        uint32_t free_run = 0;
+        uint32_t k = idx;
+        while (k < 65536 && free_run < need) {
+            struct fat16_dirent e2;
+            if (fat16_read_dirent_index(vol, dir_cluster, k, &e2) != 0)
+                break;
+            if (e2.name[0] != 0 && e2.name[0] != 0xE5)
+                break;
+            free_run++;
+            k++;
+        }
+
+        if (free_run >= need) {
+            uint8_t checksum = fat16_lfn_checksum(short_name);
+            for (uint32_t i = 0; i < n_lfn; i++) {
+                struct fat16_dirent lfn;
+                fat16_lfn_encode(&lfn, (uint8_t)((n_lfn - i) | ((i == 0) ? 0x40 : 0)), checksum, name, i * 13);
+                if (fat16_write_dirent_index(vol, dir_cluster, start + i, &lfn) != 0)
+                    return 6;
+            }
+
+            struct fat16_dirent new_entry;
+            memset(&new_entry, 0, sizeof(new_entry));
+            memcpy(new_entry.name, short_name, 11);
+            new_entry.attr = attr;
+            new_entry.cluster_low = start_cluster & 0xFFFF;
+            new_entry.cluster_high = (start_cluster >> 16) & 0xFFFF;
+            new_entry.size = size;
+            return (fat16_write_dirent_index(vol, dir_cluster, start + n_lfn, &new_entry) == 0) ? 0 : 6;
+        }
+
+        idx = k;
     }
-    
-    if (fat16_read_cluster(vol, free_cluster, buffer) != 0) {
-        frame_free(phys);
-        return 5;
-    }
-    
-    struct fat16_dirent *entry = (struct fat16_dirent *)(buffer + free_index * 32);
-    memset(entry, 0, 32);
-    fat16_write_dirent_name(entry, name);
-    entry->attr = attr;
-    entry->cluster_low = start_cluster & 0xFFFF;
-    entry->cluster_high = (start_cluster >> 16) & 0xFFFF;
-    entry->size = size;
-    
-    if (fat16_write_cluster(vol, free_cluster, buffer) != 0) {
-        frame_free(phys);
-        return 6;
-    }
-    
-    frame_free(phys);
-    return 0;
+
+    return 11;
 }
 
 static uint8_t fat16_delete_dirent(const fat_node *vol, uint16_t dir_cluster, const char *name) {
-    uint64_t phys = frame_alloc();
-    if (!phys) {
-        return 1;
+    uint32_t index;
+    if (fat16_find_entry_index(vol, dir_cluster, name, &index) != 0)
+        return 5;
+
+    struct fat16_dirent entry;
+    if (fat16_read_dirent_index(vol, dir_cluster, index, &entry) != 0)
+        return 5;
+
+    uint16_t cluster = entry.cluster_low | (entry.cluster_high << 16);
+    if (!(entry.attr & FAT16_ATTR_DIRECTORY) && cluster)
+        fat16_free_cluster_chain(vol, cluster);
+
+    entry.name[0] = 0xE5;
+    if (fat16_write_dirent_index(vol, dir_cluster, index, &entry) != 0)
+        return 4;
+
+    uint32_t k = index;
+    while (k > 0) {
+        struct fat16_dirent e;
+        if (fat16_read_dirent_index(vol, dir_cluster, k - 1, &e) != 0)
+            break;
+        if (e.attr != FAT16_ATTR_LFN)
+            break;
+        e.name[0] = 0xE5;
+        if (fat16_write_dirent_index(vol, dir_cluster, k - 1, &e) != 0)
+            break;
+        k--;
     }
-    
-    uint8_t *buffer = (uint8_t *)phys_to_virt(phys);
-    uint16_t current = dir_cluster;
-    
-    while (current >= 2 && current < FAT16_CLUSTER_BAD) {
-        if (fat16_read_cluster(vol, current, buffer) != 0) {
-            frame_free(phys);
-            return 2;
-        }
-        
-        for (int i = 0; i < vol->data.bpb.bps / 32; i++) {
-            struct fat16_dirent *entry = (struct fat16_dirent *)(buffer + i * 32);
-            
-            if (entry->name[0] == 0) {
-                frame_free(phys);
-                return 3;
-            }
-            
-            if (entry->name[0] == 0xE5 || entry->attr == FAT16_ATTR_LFN) {
-                continue;
-            }
-            
-            char entry_name[256];
-            fat16_read_dirent(entry, entry_name, sizeof(entry_name));
-            
-            if (strcmp(entry_name, name) == 0) {
-                entry->name[0] = 0xE5;
-                
-                uint16_t cluster = entry->cluster_low | (entry->cluster_high << 16);
-                if (!(entry->attr & FAT16_ATTR_DIRECTORY) && cluster) {
-                    fat16_free_cluster_chain(vol, cluster);
-                }
-                
-                if (fat16_write_cluster(vol, current, buffer) != 0) {
-                    frame_free(phys);
-                    return 4;
-                }
-                
-                frame_free(phys);
-                return 0;
-            }
-        }
-        
-        current = fat16_get_next_cluster(vol, current);
-    }
-    
-    frame_free(phys);
-    return 4;
+
+    return 0;
 }
 
 static void fat16_debug_print(const fat *f) {
@@ -783,12 +999,19 @@ uint8_t fat16_create_file(const void *vol_ptr, uint16_t dir_cluster, const char 
     
     if (fat16_create_dirent(vol, dir_cluster, name, FAT16_ATTR_ARCHIVE, start_cluster, size) != 0) {
         if (start_cluster) {
-            fat16_free_cluster_chain(vol, start_cluster);
+            fat16_free_cluster_chain_internal(vol, start_cluster);
         }
         return 3;
     }
     
     return 0;
+}
+
+void fat16_free_cluster_chain(const void *vol_ptr, uint16_t start_cluster) {
+    const fat_node *vol = (const fat_node *)vol_ptr;
+    if (!vol)
+        return;
+    fat16_free_cluster_chain_internal(vol, start_cluster);
 }
 
 uint8_t fat16_delete_file(const void *vol_ptr, uint16_t dir_cluster, const char *name) {
@@ -904,46 +1127,62 @@ uint8_t fat16_list_directory(const void *vol_ptr, uint16_t dir_cluster, fat16_di
     if (!vol) {
         return 1;
     }
-    
-    uint64_t phys = frame_alloc();
-    if (!phys) {
-        return 2;
-    }
-    
-    uint8_t *buffer = (uint8_t *)phys_to_virt(phys);
-    uint16_t current = dir_cluster;
+
     uint16_t index = 0;
     uint16_t max_count = *count;
-    
-    while (current >= 2 && current < FAT16_CLUSTER_BAD && index < max_count) {
-        if (fat16_read_cluster(vol, current, buffer) != 0) {
-            frame_free(phys);
-            return 3;
-        }
-        
-        for (int i = 0; i < vol->data.bpb.bps / 32 && index < max_count; i++) {
-            struct fat16_dirent *entry = (struct fat16_dirent *)(buffer + i * 32);
-            
-            if (entry->name[0] == 0) {
-                frame_free(phys);
-                *count = index;
-                return 0;
+
+    for (uint32_t idx = 0; idx < 65536; idx++) {
+        struct fat16_dirent entry;
+        if (fat16_read_dirent_index(vol, dir_cluster, idx, &entry) != 0)
+            break;
+        if (entry.name[0] == 0)
+            break;
+
+        if (entry.attr == FAT16_ATTR_LFN) {
+            struct fat16_dirent lfn_entries[21];
+            int lfn_count = 0;
+            uint32_t k = idx;
+            while (lfn_count < 21) {
+                struct fat16_dirent e;
+                if (fat16_read_dirent_index(vol, dir_cluster, k, &e) != 0)
+                    break;
+                if (e.attr != FAT16_ATTR_LFN)
+                    break;
+                lfn_entries[lfn_count++] = e;
+                k++;
             }
-            
-            if (entry->name[0] == 0xE5 || entry->attr == FAT16_ATTR_LFN) {
-                continue;
+
+            struct fat16_dirent short_entry;
+            if (fat16_read_dirent_index(vol, dir_cluster, k, &short_entry) != 0)
+                break;
+
+            char long_name[256];
+            size_t long_len = fat16_lfn_decode(lfn_entries, lfn_count, long_name, sizeof(long_name));
+            if (long_len > 0) {
+                entries[index].start_cluster = short_entry.cluster_low | (short_entry.cluster_high << 16);
+                entries[index].attr = short_entry.attr;
+                strncpy(entries[index].name, long_name, sizeof(entries[index].name) - 1);
+                entries[index].name[sizeof(entries[index].name) - 1] = '\0';
+                index++;
+                if (index >= max_count)
+                    break;
             }
-            
-            fat16_read_dirent(entry, entries[index].name, sizeof(entries[index].name));
-            entries[index].start_cluster = entry->cluster_low | (entry->cluster_high << 16);
-            entries[index].attr = entry->attr;
-            index++;
+            idx = k;
+            continue;
         }
-        
-        current = fat16_get_next_cluster(vol, current);
+
+        if (entry.name[0] == 0xE5)
+            continue;
+
+        fat16_read_dirent(&entry, entries[index].name, sizeof(entries[index].name));
+        entries[index].start_cluster = entry.cluster_low | (entry.cluster_high << 16);
+        entries[index].attr = entry.attr;
+        index++;
+
+        if (index >= max_count)
+            break;
     }
-    
-    frame_free(phys);
+
     *count = index;
     return 0;
 }
@@ -976,49 +1215,19 @@ uint8_t fat16_create_dirent_update(const void *vol_ptr, uint16_t dir_cluster,
     const fat_node *vol = (const fat_node *)vol_ptr;
     if (!vol) return 1;
 
-    uint64_t phys = frame_alloc();
-    if (!phys) return 2;
+    uint32_t index;
+    if (fat16_find_entry_index(vol, dir_cluster, name, &index) != 0)
+        return 4;
 
-    uint8_t *buffer  = (uint8_t *)phys_to_virt(phys);
-    uint16_t current = dir_cluster;
+    struct fat16_dirent entry;
+    if (fat16_read_dirent_index(vol, dir_cluster, index, &entry) != 0)
+        return 4;
 
-    while (current >= 2 && current < FAT16_CLUSTER_BAD) {
-        if (fat16_read_cluster(vol, current, buffer) != 0) {
-            frame_free(phys);
-            return 3;
-        }
+    entry.cluster_low  = start_cluster & 0xFFFF;
+    entry.cluster_high = (start_cluster >> 16) & 0xFFFF;
+    entry.size         = size;
 
-        for (int i = 0; i < vol->data.bpb.bps / 32; i++) {
-            struct fat16_dirent *entry =
-                (struct fat16_dirent *)(buffer + i * 32);
-
-            if (entry->name[0] == 0)    { frame_free(phys); return 4; }
-            if (entry->name[0] == 0xE5) continue;
-            if (entry->attr == FAT16_ATTR_LFN) continue;
-
-            char entry_name[256];
-            fat16_read_dirent(entry, entry_name, sizeof(entry_name));
-
-            if (strcmp(entry_name, name) == 0) {
-                entry->cluster_low  =  start_cluster        & 0xFFFF;
-                entry->cluster_high = (start_cluster >> 16) & 0xFFFF;
-                entry->size         = size;
-
-                if (fat16_write_cluster(vol, current, buffer) != 0) {
-                    frame_free(phys);
-                    return 5;
-                }
-
-                frame_free(phys);
-                return 0;
-            }
-        }
-
-        current = fat16_get_next_cluster(vol, current);
-    }
-
-    frame_free(phys);
-    return 4;
+    return (fat16_write_dirent_index(vol, dir_cluster, index, &entry) == 0) ? 0 : 5;
 }
 
 uint32_t fat16_get_volume_id(const void *vol_ptr) {

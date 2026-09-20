@@ -14,7 +14,9 @@ struct pending_io {
 };
 
 static void disk_complete(uint8_t controller, uint8_t port, uint8_t slot, uint8_t status, void *ctx) {
-    print("Disk completed\nController: %d\nPort: %d\nSlot: %d\n", controller, port, slot);
+    (void)controller;
+    (void)port;
+    (void)slot;
     struct pending_io *io = ctx;
     io->status = status;
     io->done = 1;
@@ -27,8 +29,6 @@ uint8_t disk_writer(uint8_t drive_number, uint64_t sector, uint8_t count, const 
         print("disk_writer(): invalid drive number %u\n", drive_number);
         return 1;
     }
-
-    print("Writing to disk\nDrive: %d\nController: %d\nPort: %d\n", drive_number, controller, port);
 
     struct pending_io *io = kmalloc(sizeof(struct pending_io));
     if (!io) {
@@ -58,11 +58,13 @@ uint8_t disk_writer(uint8_t drive_number, uint64_t sector, uint8_t count, const 
 
     asm volatile ("sti");
 
-    print("Wrote to disk\nDrive: %d\nController: %d\nPort: %d\nSuccessfully\n", drive_number, controller, port);
-
-    while (!io->done) {
+    for (;;) {
+        asm volatile ("cli");
+        if (io->done)
+            break;
         block_current();
     }
+    asm volatile ("sti");
 
     uint8_t status = io->status;
     kfree(io);
@@ -75,8 +77,6 @@ uint8_t disk_reader(uint8_t drive_number, uint64_t sector, uint8_t count, void *
         print("disk_reader(): invalid drive number %u\n", drive_number);
         return 1;
     }
-
-    print("Reading from disk\nDrive: %d\nController: %d\nPort: %d\n", drive_number, controller, port);
 
     struct pending_io *io = kmalloc(sizeof(struct pending_io));
     if (!io) {
@@ -106,12 +106,15 @@ uint8_t disk_reader(uint8_t drive_number, uint64_t sector, uint8_t count, void *
 
     asm volatile ("sti");
 
-    while (!io->done) {
+    for (;;) {
+        asm volatile ("cli");
+        if (io->done)
+            break;
         block_current();
     }
+    asm volatile ("sti");
 
     uint8_t status = io->status;
     kfree(io);
-    print("Disk read\nDrive: %d\nController: %d\nPort: %d\n", drive_number, controller, port);
     return status;
 }

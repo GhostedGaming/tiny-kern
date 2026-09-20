@@ -35,7 +35,7 @@ static uint8_t kb_e0;
 static uint8_t kb_mods;
 static uint8_t kb_locks;
 
-static int kb_wait_input(void) {
+static int kb_wait_input() {
     for (int i = 0; i < KB_TIMEOUT; i++) {
         if (!(inb(KB_CMD_PORT) & KB_STATUS_INPUT_FULL))
             return 0;
@@ -43,7 +43,7 @@ static int kb_wait_input(void) {
     return -1;
 }
 
-static int kb_wait_output(void) {
+static int kb_wait_output() {
     for (int i = 0; i < KB_TIMEOUT; i++) {
         if (inb(KB_CMD_PORT) & KB_STATUS_OUTPUT_FULL)
             return 0;
@@ -65,12 +65,12 @@ static void kb_write_data(uint8_t data) {
     io_wait();
 }
 
-static void kb_flush(void) {
+static void kb_flush() {
     while (inb(KB_CMD_PORT) & KB_STATUS_OUTPUT_FULL)
         inb(KB_DATA_PORT);
 }
 
-static uint8_t kb_await_byte(void) {
+static uint8_t kb_await_byte() {
     if (kb_wait_output() != 0)
         return 0xFF;
     return inb(KB_DATA_PORT);

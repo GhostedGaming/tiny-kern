@@ -390,7 +390,8 @@ uint8_t paging_init(struct limine_memmap_response *memmap, struct limine_executa
             || entry->type == LIMINE_MEMMAP_ACPI_RECLAIMABLE
             || entry->type == LIMINE_MEMMAP_ACPI_NVS
             || entry->type == LIMINE_MEMMAP_RESERVED
-            || entry->type == LIMINE_MEMMAP_EXECUTABLE_AND_MODULES) {
+            || entry->type == LIMINE_MEMMAP_EXECUTABLE_AND_MODULES
+            || entry->type == LIMINE_MEMMAP_RESERVED_MAPPED) {
             for (uint64_t offset = 0; offset < entry->length; offset += PAGE_SIZE) {
                 if (paging_map_page((uint64_t *)pml4,
                                      phys_to_virt(entry->base + offset),

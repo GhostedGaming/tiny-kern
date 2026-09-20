@@ -3,6 +3,7 @@ ENTRY(_start)
 PHDRS {
     text PT_LOAD FILEHDR PHDRS FLAGS(5);
     data PT_LOAD FLAGS(6);
+    tls PT_TLS FLAGS(6);
 }
 
 SECTIONS {
@@ -20,6 +21,14 @@ SECTIONS {
     } :text
 
     . = ALIGN(0x1000);
+
+    .tdata : {
+        *(.tdata*)
+    } :data :tls
+
+    .tbss : {
+        *(.tbss*)
+    } :data :tls
 
     .data : {
         *(.data*)

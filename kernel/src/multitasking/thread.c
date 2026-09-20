@@ -94,6 +94,8 @@ struct tcb *create_thread(void *entry, struct pcb *p, void *ustack) {
     t->parent = p;
     t->state = Ready;
     t->fs_base = 0;
+    t->wake_tick = 0;
+    t->timed = 0;
 
     if (thread_list == NULL) {
         thread_list = t;

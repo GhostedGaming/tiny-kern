@@ -3,10 +3,16 @@
 #include <limine.h>
 #include <mm/memory.h>
 #include <mm/heap.h>
+#include <mm/frame.h>
+#include <mm/hhdm.h>
 #include <logging/print.h>
 #include <tty.h>
+#include <storage/drive_map.h>
+#include <storage/disk_writer.h>
 #include <fs/vfs.h>
 #include <fs/devfs.h>
+
+#define DEV_BLOCK_SIZE 512
 
 #define DEVFS_MAX_DEVS  64
 #define MAX_NAME        256
@@ -14,6 +20,7 @@
 extern volatile struct limine_framebuffer_request framebuffer_request;
 
 static devfs_dev_t  devfs_devs[DEVFS_MAX_DEVS];
+static devfs_block_t g_block_devs[DEVFS_MAX_DEVS];
 static uint8_t      devfs_dev_count = 0;
 static uint8_t      devfs_ready     = 0;
 static vfs_node_t  *devfs_root      = NULL;
@@ -31,17 +38,87 @@ static vfs_node_ops_t devfs_dir_ops = {
     .rmdir   = NULL,
 };
 
+static vfs_node_t *devfs_lookup(vfs_node_t *dir, const char *name);
+
+static ssize_t blockdev_read(devfs_dev_t *dev, void *buf, size_t size, off_t offset) {
+    devfs_block_t *blk = (devfs_block_t *)dev->priv;
+    if (!blk || offset < 0) return -1;
+    uint64_t dev_size = (uint64_t)blk->sector_count * DEV_BLOCK_SIZE;
+    if ((uint64_t)offset >= dev_size) return 0;
+    if ((uint64_t)offset + size > dev_size) size = (size_t)(dev_size - (uint64_t)offset);
+
+    uint64_t frame = frame_alloc();
+    if (!frame) return -1;
+    uint8_t *tmp = (uint8_t *)phys_to_virt(frame);
+
+    uint8_t *dst = (uint8_t *)buf;
+    size_t done = 0;
+    while (done < size) {
+        uint64_t lba = ((uint64_t)offset + done) / DEV_BLOCK_SIZE;
+        uint32_t in_sector = ((uint64_t)offset + done) % DEV_BLOCK_SIZE;
+        uint32_t take = DEV_BLOCK_SIZE - in_sector;
+        if (take > size - done) take = (uint32_t)(size - done);
+
+        if (disk_reader(blk->drive_number, lba, 1, tmp) != 0) {
+            frame_free(frame);
+            return done ? (ssize_t)done : -1;
+        }
+        memcpy(dst + done, tmp + in_sector, take);
+        done += take;
+    }
+    frame_free(frame);
+    return (ssize_t)done;
+}
+
+static ssize_t blockdev_write(devfs_dev_t *dev, const void *buf, size_t size, off_t offset) {
+    devfs_block_t *blk = (devfs_block_t *)dev->priv;
+    if (!blk || offset < 0) return -1;
+    uint64_t dev_size = (uint64_t)blk->sector_count * DEV_BLOCK_SIZE;
+    if ((uint64_t)offset >= dev_size) return 0;
+    if ((uint64_t)offset + size > dev_size) size = (size_t)(dev_size - (uint64_t)offset);
+
+    uint64_t frame = frame_alloc();
+    if (!frame) return -1;
+    uint8_t *tmp = (uint8_t *)phys_to_virt(frame);
+
+    const uint8_t *src = (const uint8_t *)buf;
+    size_t done = 0;
+    while (done < size) {
+        uint64_t lba = ((uint64_t)offset + done) / DEV_BLOCK_SIZE;
+        uint32_t in_sector = ((uint64_t)offset + done) % DEV_BLOCK_SIZE;
+        uint32_t take = DEV_BLOCK_SIZE - in_sector;
+        if (take > size - done) take = (uint32_t)(size - done);
+
+        if (in_sector || take != DEV_BLOCK_SIZE) {
+            if (disk_reader(blk->drive_number, lba, 1, tmp) != 0) {
+                frame_free(frame);
+                return done ? (ssize_t)done : -1;
+            }
+        }
+        memcpy(tmp + in_sector, src + done, take);
+        if (disk_writer(blk->drive_number, lba, 1, tmp) != 0) {
+            frame_free(frame);
+            return done ? (ssize_t)done : -1;
+        }
+        done += take;
+    }
+    frame_free(frame);
+    return (ssize_t)done;
+}
+
 static ssize_t dev_node_read(vfs_node_t *node, void *buf, size_t size, off_t offset) {
     devfs_dev_t *dev = (devfs_dev_t *)node->priv;
-    if (!dev || !dev->read) return -1;
-    (void)offset;
+    if (!dev) return -1;
+    if (dev->is_block) return blockdev_read(dev, buf, size, offset);
+    if (!dev->read) return -1;
     return dev->read(dev, buf, size);
 }
 
 static ssize_t dev_node_write(vfs_node_t *node, const void *buf, size_t size, off_t offset) {
     devfs_dev_t *dev = (devfs_dev_t *)node->priv;
-    if (!dev || !dev->write) return -1;
-    (void)offset;
+    if (!dev) return -1;
+    if (dev->is_block) return blockdev_write(dev, buf, size, offset);
+    if (!dev->write) return -1;
     return dev->write(dev, buf, size);
 }
 
@@ -146,11 +223,6 @@ static ssize_t stderr_write(devfs_dev_t *dev, const void *buf, size_t count) {
     return console_write(dev, buf, count);
 }
 
-typedef struct {
-    uint32_t *addr;
-    size_t    size;
-} fb_info_t;
-
 static fb_info_t g_fb;
 
 static ssize_t fb_read(devfs_dev_t *dev, void *buf, size_t count) {
@@ -167,6 +239,30 @@ static ssize_t fb_write(devfs_dev_t *dev, const void *buf, size_t count) {
     return (ssize_t)count;
 }
 
+struct fb_info_user {
+    uint64_t width;
+    uint64_t height;
+    uint64_t pitch;
+    uint32_t bpp;
+    uint32_t pad;
+};
+
+static int fb_ioctl(devfs_dev_t *dev, unsigned long req, void *arg) {
+    (void)dev;
+    if (req == 0x4600) {
+        fb_info_t *fb = (fb_info_t *)dev->priv;
+        struct fb_info_user info;
+        info.width = fb->width;
+        info.height = fb->height;
+        info.pitch = fb->pitch;
+        info.bpp = fb->bpp;
+        info.pad = 0;
+        memcpy(arg, &info, sizeof(info));
+        return 0;
+    }
+    return -1;
+}
+
 int devfs_register(const char *name, ssize_t (*read)(devfs_dev_t *, void *, size_t),
                    ssize_t (*write)(devfs_dev_t *, const void *, size_t), void *priv) {
     if (devfs_dev_count >= DEVFS_MAX_DEVS) return -1;
@@ -178,7 +274,9 @@ int devfs_register(const char *name, ssize_t (*read)(devfs_dev_t *, void *, size
     dev->name[nlen] = '\0';
     dev->read  = read;
     dev->write = write;
+    dev->ioctl = NULL;
     dev->priv  = priv;
+    dev->is_block = 0;
 
     vfs_node_t *node = vfs_node_alloc_pub(name, VFS_NODE_DEV);
     if (node) {
@@ -188,6 +286,32 @@ int devfs_register(const char *name, ssize_t (*read)(devfs_dev_t *, void *, size
     }
 
     devfs_dev_count++;
+    return 0;
+}
+
+int devfs_register_block(const char *name, devfs_block_t *blk) {
+    if (devfs_register(name, NULL, NULL, blk) != 0) return -1;
+
+    devfs_dev_t *dev = devfs_get(name);
+    if (!dev) return -1;
+    dev->is_block = 1;
+
+    vfs_node_t *node = vfs_node_find_child_pub(devfs_root, name);
+    if (node) node->size = (size_t)blk->sector_count * DEV_BLOCK_SIZE;
+    return 0;
+}
+
+int devfs_resolve_drive(const char *path, uint8_t *drive_number) {
+    if (!path || !drive_number) return -1;
+
+    const char *name = path;
+    if (strncmp(name, "/dev/", 5) == 0) name += 5;
+
+    devfs_dev_t *dev = devfs_get(name);
+    if (!dev || !dev->is_block || !dev->priv) return -1;
+
+    devfs_block_t *blk = (devfs_block_t *)dev->priv;
+    *drive_number = blk->drive_number;
     return 0;
 }
 
@@ -234,10 +358,34 @@ void devfs_init() {
     devfs_register("stdin",   stdin_read,   stdin_write,   NULL);
     devfs_register("stdout",  stdout_read,  stdout_write,  NULL);
     devfs_register("stderr",  stderr_read,  stderr_write,  NULL);
+
+    devfs_get("tty")->ioctl = tty_ioctl;
+    devfs_get("stdin")->ioctl = tty_ioctl;
+    devfs_get("stdout")->ioctl = tty_ioctl;
+    devfs_get("stderr")->ioctl = tty_ioctl;
+
     struct limine_framebuffer *lfb = framebuffer_request.response->framebuffers[0];
     g_fb.addr = (uint32_t *)lfb->address;
     g_fb.size = lfb->width * lfb->height * (lfb->bpp / 8);
+    g_fb.phys = virt_to_phys((void *)lfb->address);
+    g_fb.width = lfb->width;
+    g_fb.height = lfb->height;
+    g_fb.pitch = lfb->pitch;
+    g_fb.bpp = lfb->bpp;
     devfs_register("fb0", fb_read, fb_write, &g_fb);
- 
+    devfs_get("fb0")->ioctl = fb_ioctl;
+
+    uint8_t drive_count = drive_map_count();
+    for (uint8_t i = 0; i < drive_count && i < DEVFS_MAX_DEVS; i++) {
+        drive_t *d = drive_map_get(i);
+        if (!d || d->sector_count == 0) continue;
+
+        char name[8] = "sda";
+        name[2] = (char)('a' + i);
+        g_block_devs[i].drive_number = i;
+        g_block_devs[i].sector_count = d->sector_count;
+        devfs_register_block(name, &g_block_devs[i]);
+    }
+
     print("devfs: initialized with %d built-in devices\n", devfs_dev_count);
 }
